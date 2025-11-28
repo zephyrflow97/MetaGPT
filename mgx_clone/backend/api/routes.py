@@ -199,3 +199,61 @@ async def get_history(skip: int = 0, limit: int = 50):
     """Get project history (alias for list_projects)"""
     return await list_projects(skip=skip, limit=limit)
 
+
+@router.get("/projects/{project_id}/preview/{file_path:path}")
+async def preview_project_file(project_id: str, file_path: str):
+    """Serve static files from project workspace for preview"""
+    try:
+        project = await get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        workspace_path = project.get("workspace_path")
+        if not workspace_path or not Path(workspace_path).exists():
+            raise HTTPException(status_code=404, detail="Project workspace not found")
+        
+        # Try dist folder first (for built projects), then root
+        dist_path = Path(workspace_path) / "dist" / file_path
+        root_path = Path(workspace_path) / file_path
+        
+        if dist_path.exists() and dist_path.is_file():
+            full_path = dist_path
+        elif root_path.exists() and root_path.is_file():
+            full_path = root_path
+        else:
+            # Default to index.html in dist or root
+            if file_path == "" or file_path == "index.html":
+                if (Path(workspace_path) / "dist" / "index.html").exists():
+                    full_path = Path(workspace_path) / "dist" / "index.html"
+                elif (Path(workspace_path) / "index.html").exists():
+                    full_path = Path(workspace_path) / "index.html"
+                else:
+                    raise HTTPException(status_code=404, detail="index.html not found")
+            else:
+                raise HTTPException(status_code=404, detail="File not found")
+        
+        # Determine media type
+        suffix = full_path.suffix.lower()
+        media_types = {
+            '.html': 'text/html',
+            '.css': 'text/css',
+            '.js': 'application/javascript',
+            '.json': 'application/json',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.svg': 'image/svg+xml',
+            '.ico': 'image/x-icon',
+            '.woff': 'font/woff',
+            '.woff2': 'font/woff2',
+            '.ttf': 'font/ttf',
+        }
+        media_type = media_types.get(suffix, 'application/octet-stream')
+        
+        return FileResponse(path=full_path, media_type=media_type)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

@@ -189,7 +189,7 @@ export function CodePreview({
           <div className="flex-1 bg-white">
             {project.workspace_path ? (
               <iframe
-                src={`http://localhost:8000/workspace/${project.id}/index.html`}
+                src={`http://localhost:8000/preview/${project.id}/`}
                 className="w-full h-full border-0"
                 title="Project Preview"
               />
