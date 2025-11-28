@@ -12,6 +12,7 @@ export default function Home() {
   const [projects, setProjects] = useState<Project[]>([])
   const [currentProject, setCurrentProject] = useState<Project | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null)  // Track currently active project (viewing or generating)
   const [showPreview, setShowPreview] = useState(false)
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null)
   const [fileContent, setFileContent] = useState<string>('')
@@ -19,6 +20,7 @@ export default function Home() {
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef<string>(generateClientId())
   const messageIdCounter = useRef<number>(0)
+  const activeProjectIdRef = useRef<string | null>(null)  // Ref for WebSocket callback access
 
   // Generate unique message ID
   const generateMessageId = () => {
@@ -82,27 +84,54 @@ export default function Home() {
   }, [])
 
   const handleWebSocketMessage = (data: any) => {
+    const messageProjectId = data.project_id
+    
     const newMessage: Message = {
       id: generateMessageId(),
       type: data.type,
       agent: data.agent || 'System',
       content: data.content,
       timestamp: new Date().toISOString(),
-      projectId: data.project_id,
+      projectId: messageProjectId,
     }
 
-    if (data.type === 'agent_message' || data.type === 'status') {
-      setMessages((prev) => [...prev, newMessage])
+    // Only add message if it belongs to the currently active project
+    // When status message arrives with project_id, set it as active project
+    if (data.type === 'status' && messageProjectId && data.status === 'created') {
+      // New project started - set as active and clear old messages (keep user message)
+      activeProjectIdRef.current = messageProjectId
+      setActiveProjectId(messageProjectId)
+      // Refresh projects list to show the new project in sidebar
+      fetchProjects()
+      setMessages((prev) => {
+        // Keep only the last user message (the requirement that started this project)
+        const userMessages = prev.filter(m => m.type === 'user')
+        const lastUserMessage = userMessages[userMessages.length - 1]
+        return lastUserMessage ? [lastUserMessage, newMessage] : [newMessage]
+      })
+    } else if (data.type === 'agent_message' || data.type === 'status') {
+      // Only add if matches active project (use ref for latest value in closure)
+      setMessages((prev) => {
+        // Check if this message belongs to our active session
+        if (!messageProjectId || messageProjectId === activeProjectIdRef.current) {
+          return [...prev, newMessage]
+        }
+        return prev
+      })
     } else if (data.type === 'complete') {
       setMessages((prev) => [...prev, newMessage])
       setIsGenerating(false)
+      activeProjectIdRef.current = null
+      setActiveProjectId(null)  // Clear active project after completion
       fetchProjects()
-      if (data.project_id) {
-        loadProjectDetails(data.project_id)
+      if (messageProjectId) {
+        loadProjectDetails(messageProjectId)
       }
     } else if (data.type === 'error') {
       setMessages((prev) => [...prev, newMessage])
       setIsGenerating(false)
+      activeProjectIdRef.current = null
+      setActiveProjectId(null)  // Clear active project on error
     }
   }
 
@@ -118,16 +147,54 @@ export default function Home() {
 
   const loadProjectDetails = async (projectId: string) => {
     try {
-      const [projectRes, filesRes] = await Promise.all([
+      const [projectRes, filesRes, messagesRes] = await Promise.all([
         fetch(`http://localhost:8000/api/projects/${projectId}`),
         fetch(`http://localhost:8000/api/projects/${projectId}/files`),
+        fetch(`http://localhost:8000/api/projects/${projectId}/messages`),
       ])
 
       const project = await projectRes.json()
       const filesData = await filesRes.json()
+      const messagesData = await messagesRes.json()
 
       setCurrentProject(project)
       setProjectFiles(filesData.files || [])
+      
+      // Load saved messages and add user's original requirement as first message
+      const savedMessages: Message[] = []
+      
+      // Add original user requirement as first message
+      if (project.requirement) {
+        savedMessages.push({
+          id: `user-${project.id}`,
+          type: 'user',
+          agent: 'User',
+          content: project.requirement,
+          timestamp: project.created_at,
+          projectId: project.id,
+        })
+      }
+      
+      // Add saved agent messages
+      if (messagesData.messages && messagesData.messages.length > 0) {
+        messagesData.messages.forEach((msg: any) => {
+          savedMessages.push({
+            id: msg.id,
+            type: msg.message_type,
+            agent: msg.agent,
+            content: msg.content,
+            timestamp: msg.created_at,
+            projectId: msg.project_id,
+          })
+        })
+      }
+      
+      // Only update messages if not currently generating another project
+      if (!isGenerating) {
+        setMessages(savedMessages)
+        activeProjectIdRef.current = projectId
+        setActiveProjectId(projectId)
+      }
       setShowPreview(true)
     } catch (error) {
       console.error('Failed to load project details:', error)
@@ -200,9 +267,13 @@ export default function Home() {
         currentProject={currentProject}
         onSelectProject={handleSelectProject}
         onNewChat={() => {
-          setMessages([])
-          setCurrentProject(null)
-          setShowPreview(false)
+          if (!isGenerating) {
+            setMessages([])
+            setCurrentProject(null)
+            activeProjectIdRef.current = null
+            setActiveProjectId(null)
+            setShowPreview(false)
+          }
         }}
       />
 

@@ -6,8 +6,12 @@ MetaGPT Service - Wraps MetaGPT functionality for web usage
 Note: MetaGPT imports are done lazily to avoid config validation on startup.
 """
 import asyncio
+import logging
 from pathlib import Path
 from typing import Callable, Optional, TYPE_CHECKING
+
+# Create logger for this module
+logger = logging.getLogger(__name__)
 
 # Lazy imports to avoid config validation on module load
 if TYPE_CHECKING:

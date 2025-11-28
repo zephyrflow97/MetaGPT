@@ -14,6 +14,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from mgx_clone.backend.services.metagpt_service import MetaGPTService
 from mgx_clone.backend.storage.database import (
     create_project,
+    save_message,
     update_project_status,
     update_project_workspace,
 )
@@ -124,6 +125,8 @@ async def handle_create_project(client_id: str, message: dict):
     project = await create_project(name, requirement)
     project_id = project["id"]
     
+    # Save and send initial status message
+    await save_message(project_id, "System", "Project created, starting generation...", "status")
     await manager.send_message(client_id, {
         "type": "status",
         "content": "Project created, starting generation...",
@@ -131,8 +134,16 @@ async def handle_create_project(client_id: str, message: dict):
         "status": "created"
     })
     
-    # Callback function to send messages to client
+    # Callback function to send messages to client AND save to database
     async def message_callback(agent: str, content: str, msg_type: str = "agent_message"):
+        # Save message to database
+        await save_message(
+            project_id=project_id,
+            agent=agent,
+            content=content,
+            message_type=msg_type
+        )
+        # Send message to client
         await manager.send_message(client_id, {
             "type": msg_type,
             "agent": agent,
@@ -152,6 +163,8 @@ async def handle_create_project(client_id: str, message: dict):
         await update_project_workspace(project_id, str(workspace_path))
         await update_project_status(project_id, "completed")
         
+        # Save and send completion message
+        await save_message(project_id, "System", "Project generation completed!", "complete")
         await manager.send_message(client_id, {
             "type": "complete",
             "content": "Project generation completed!",
@@ -162,6 +175,8 @@ async def handle_create_project(client_id: str, message: dict):
     except Exception as e:
         error_msg = f"Error generating project: {str(e)}\n{traceback.format_exc()}"
         await update_project_status(project_id, "failed")
+        # Save and send error message
+        await save_message(project_id, "System", error_msg, "error")
         await manager.send_message(client_id, {
             "type": "error",
             "content": error_msg,

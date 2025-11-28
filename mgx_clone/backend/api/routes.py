@@ -16,6 +16,7 @@ from mgx_clone.backend.storage.database import (
     create_project,
     get_all_projects,
     get_project,
+    get_project_messages,
     update_project_status,
 )
 
@@ -76,6 +77,22 @@ async def get_project_detail(project_id: str):
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         return ProjectResponse(**project)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/projects/{project_id}/messages")
+async def get_messages(project_id: str):
+    """Get all messages for a project"""
+    try:
+        project = await get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        messages = await get_project_messages(project_id)
+        return {"messages": messages}
     except HTTPException:
         raise
     except Exception as e:
