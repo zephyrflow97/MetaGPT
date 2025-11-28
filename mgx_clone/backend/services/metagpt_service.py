@@ -49,14 +49,20 @@ def create_web_mgx_env(context, message_callback: Optional[Callable] = None):
                     agent_name = message.sent_from or "System"
                     content = message.content
                     
-                    # Run callback in event loop
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.create_task(
+                    # Run callback in event loop - use proper async handling
+                    try:
+                        loop = asyncio.get_running_loop()
+                        # Schedule the callback and ensure it runs
+                        future = asyncio.ensure_future(
                             self._message_callback(agent_name, content, "agent_message")
                         )
-                    else:
-                        loop.run_until_complete(
+                        # Add error handler to log any exceptions
+                        future.add_done_callback(
+                            lambda f: logger.warning(f"Callback error: {f.exception()}") if f.exception() else None
+                        )
+                    except RuntimeError:
+                        # No running loop, create a new one
+                        asyncio.run(
                             self._message_callback(agent_name, content, "agent_message")
                         )
                 except Exception as e:
@@ -174,24 +180,50 @@ class MetaGPTService:
         
         await company.run(n_round=self.n_round, idea=requirement)
         
-        # Get project path from context
-        project_path = ctx.kwargs.get("project_path")
-        if project_path:
-            project_path = Path(project_path)
-        else:
-            # Try to get from config
+        # Get project path from context - use attribute access, not dict get
+        project_path = None
+        
+        # Method 1: Try to get from ctx.kwargs (set by PrepareDocuments action)
+        if hasattr(ctx.kwargs, 'project_path') and ctx.kwargs.project_path:
+            project_path = Path(ctx.kwargs.project_path)
+            logger.info(f"Got project_path from ctx.kwargs: {project_path}")
+        
+        # Method 2: Try to get from config
+        if not project_path or not project_path.exists():
             try:
-                config_project_path = config.project_path
-                if config_project_path:
-                    project_path = Path(config_project_path)
-                else:
-                    # Use MetaGPT's default workspace
-                    from metagpt.const import DEFAULT_WORKSPACE_ROOT
-                    project_path = DEFAULT_WORKSPACE_ROOT / (project_name or "project")
-            except Exception:
-                # Fallback to MetaGPT project root workspace
-                metagpt_root = Path(__file__).parent.parent.parent.parent
-                project_path = metagpt_root / "workspace" / (project_name or "project")
+                if config.project_path:
+                    project_path = Path(config.project_path)
+                    logger.info(f"Got project_path from config: {project_path}")
+            except Exception as e:
+                logger.warning(f"Failed to get project_path from config: {e}")
+        
+        # Method 3: Scan workspace for most recently created project
+        if not project_path or not project_path.exists():
+            try:
+                from metagpt.const import DEFAULT_WORKSPACE_ROOT
+                workspace_root = DEFAULT_WORKSPACE_ROOT
+                if workspace_root.exists():
+                    # Find the most recently modified directory
+                    project_dirs = [d for d in workspace_root.iterdir() if d.is_dir() and not d.name.startswith('.')]
+                    if project_dirs:
+                        # Sort by modification time, get the newest
+                        project_path = max(project_dirs, key=lambda x: x.stat().st_mtime)
+                        logger.info(f"Got project_path from workspace scan: {project_path}")
+            except Exception as e:
+                logger.warning(f"Failed to scan workspace: {e}")
+        
+        # Method 4: Fallback to MetaGPT project root workspace
+        if not project_path or not project_path.exists():
+            metagpt_root = Path(__file__).parent.parent.parent.parent
+            workspace_root = metagpt_root / "workspace"
+            if workspace_root.exists():
+                project_dirs = [d for d in workspace_root.iterdir() if d.is_dir() and not d.name.startswith('.')]
+                if project_dirs:
+                    project_path = max(project_dirs, key=lambda x: x.stat().st_mtime)
+                    logger.info(f"Got project_path from fallback workspace: {project_path}")
+            else:
+                project_path = workspace_root / (project_name or "project")
+                logger.warning(f"Using fallback project_path: {project_path}")
         
         if self.message_callback:
             await self.message_callback(

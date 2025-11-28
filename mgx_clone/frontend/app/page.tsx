@@ -18,51 +18,72 @@ export default function Home() {
   const [projectFiles, setProjectFiles] = useState<FileInfo[]>([])
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef<string>(generateClientId())
+  const messageIdCounter = useRef<number>(0)
+
+  // Generate unique message ID
+  const generateMessageId = () => {
+    messageIdCounter.current += 1
+    return `${Date.now()}-${messageIdCounter.current}-${Math.random().toString(36).substring(2, 9)}`
+  }
 
   // Load projects on mount
   useEffect(() => {
     fetchProjects()
   }, [])
 
-  // Connect WebSocket
+  // Connect WebSocket - handle React Strict Mode double mount
   useEffect(() => {
-    connectWebSocket()
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
+    let isMounted = true
+    let ws: WebSocket | null = null
+
+    const connect = () => {
+      if (!isMounted) return
+      
+      const wsUrl = `ws://localhost:8000/ws/chat/${clientIdRef.current}`
+      ws = new WebSocket(wsUrl)
+
+      ws.onopen = () => {
+        if (isMounted) {
+          console.log('WebSocket connected')
+          wsRef.current = ws
+        }
       }
+
+      ws.onmessage = (event) => {
+        if (isMounted) {
+          const data = JSON.parse(event.data)
+          handleWebSocketMessage(data)
+        }
+      }
+
+      ws.onclose = () => {
+        if (isMounted) {
+          console.log('WebSocket disconnected')
+          wsRef.current = null
+          // Reconnect after 3 seconds
+          setTimeout(connect, 3000)
+        }
+      }
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error)
+      }
+    }
+
+    connect()
+
+    return () => {
+      isMounted = false
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close()
+      }
+      wsRef.current = null
     }
   }, [])
 
-  const connectWebSocket = () => {
-    const wsUrl = `ws://localhost:8000/ws/chat/${clientIdRef.current}`
-    const ws = new WebSocket(wsUrl)
-
-    ws.onopen = () => {
-      console.log('WebSocket connected')
-    }
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data)
-      handleWebSocketMessage(data)
-    }
-
-    ws.onclose = () => {
-      console.log('WebSocket disconnected')
-      // Reconnect after 3 seconds
-      setTimeout(connectWebSocket, 3000)
-    }
-
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error)
-    }
-
-    wsRef.current = ws
-  }
-
   const handleWebSocketMessage = (data: any) => {
     const newMessage: Message = {
-      id: Date.now().toString(),
+      id: generateMessageId(),
       type: data.type,
       agent: data.agent || 'System',
       content: data.content,
@@ -133,7 +154,7 @@ export default function Home() {
 
     // Add user message
     const userMessage: Message = {
-      id: Date.now().toString(),
+      id: generateMessageId(),
       type: 'user',
       agent: 'User',
       content,
