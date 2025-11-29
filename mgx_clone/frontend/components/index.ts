@@ -4,4 +4,7 @@ export { CodePreview } from './CodePreview'
 export { TemplateSelector } from './TemplateSelector'
 export { ProgressBar } from './ProgressBar'
 export { AgentStatusPanel } from './AgentStatusPanel'
+export { ShareDialog } from './ShareDialog'
+export { TagManager } from './TagManager'
+export { TagSelector } from './TagSelector'
 

@@ -9,8 +9,9 @@ import json
 import traceback
 from typing import Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
+from mgx_clone.backend.core.security import get_user_id_from_token
 from mgx_clone.backend.services.metagpt_service import MetaGPTService
 from mgx_clone.backend.services.templates import generate_prompt_from_template, get_template
 from mgx_clone.backend.storage.database import (
@@ -18,6 +19,7 @@ from mgx_clone.backend.storage.database import (
     get_latest_conversation_round,
     get_project,
     get_project_messages,
+    get_user_by_id,
     save_message,
     save_user_message,
     update_project_status,
@@ -41,14 +43,21 @@ class ConnectionManager:
     
     def __init__(self):
         self.active_connections: dict[str, WebSocket] = {}
+        self.user_ids: dict[str, Optional[str]] = {}  # client_id -> user_id
     
-    async def connect(self, websocket: WebSocket, client_id: str):
+    async def connect(self, websocket: WebSocket, client_id: str, user_id: Optional[str] = None):
         await websocket.accept()
         self.active_connections[client_id] = websocket
+        self.user_ids[client_id] = user_id
     
     def disconnect(self, client_id: str):
         if client_id in self.active_connections:
             del self.active_connections[client_id]
+        if client_id in self.user_ids:
+            del self.user_ids[client_id]
+    
+    def get_user_id(self, client_id: str) -> Optional[str]:
+        return self.user_ids.get(client_id)
     
     async def send_message(self, client_id: str, message: dict):
         if client_id in self.active_connections:
@@ -73,9 +82,16 @@ manager = ConnectionManager()
 
 
 @router.websocket("/ws/chat/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: str):
+async def websocket_endpoint(
+    websocket: WebSocket,
+    client_id: str,
+    token: Optional[str] = Query(default=None)
+):
     """
     WebSocket endpoint for chat-based project generation
+    
+    Query parameters:
+    - token: Optional JWT token for authentication
     
     Message format (client -> server):
     {
@@ -95,7 +111,17 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         "agent_states": [...]  # for agent_status
     }
     """
-    await manager.connect(websocket, client_id)
+    # Authenticate user if token provided
+    user_id = None
+    if token:
+        user_id = get_user_id_from_token(token)
+        if user_id:
+            # Verify user exists and is active
+            user = await get_user_by_id(user_id)
+            if not user or not user.get("is_active"):
+                user_id = None
+    
+    await manager.connect(websocket, client_id, user_id)
     
     try:
         while True:
@@ -134,7 +160,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 
 
 async def handle_create_project(client_id: str, message: dict):
-    """Handle project creation request"""
+    """Handle project creation request (requires authentication)"""
     name = message.get("name", "Untitled Project")
     requirement = message.get("requirement", "")
     
@@ -145,8 +171,18 @@ async def handle_create_project(client_id: str, message: dict):
         })
         return
     
-    # Create project record
-    project = await create_project(name, requirement)
+    # Get user_id from connection manager - authentication required
+    user_id = manager.get_user_id(client_id)
+    if not user_id:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "Authentication required. Please log in to create projects.",
+            "auth_required": True
+        })
+        return
+    
+    # Create project record with user_id
+    project = await create_project(name, requirement, user_id=user_id)
     project_id = project["id"]
     
     # Save and send initial status message
@@ -508,7 +544,17 @@ async def handle_regenerate_project(client_id: str, message: dict):
 
 
 async def handle_create_from_template(client_id: str, message: dict):
-    """Handle project creation from a template"""
+    """Handle project creation from a template (requires authentication)"""
+    # Check authentication first
+    user_id = manager.get_user_id(client_id)
+    if not user_id:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "Authentication required. Please log in to create projects.",
+            "auth_required": True
+        })
+        return
+    
     template_id = message.get("template_id")
     project_name = message.get("name", "My Project")
     selected_features = message.get("features", [])

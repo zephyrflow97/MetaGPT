@@ -16,8 +16,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from mgx_clone.backend.api.auth import router as auth_router
 from mgx_clone.backend.api.routes import router as api_router
 from mgx_clone.backend.api.websocket import router as ws_router
+from mgx_clone.backend.core.config import settings
 from mgx_clone.backend.storage.database import init_db, get_project
 
 
@@ -33,20 +35,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="MGX Clone API",
     description="A MetaGPT powered natural language programming platform",
-    version="0.1.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
 # CORS middleware for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Include routers
+app.include_router(auth_router, prefix="/api")
 app.include_router(api_router, prefix="/api")
 app.include_router(ws_router)
 

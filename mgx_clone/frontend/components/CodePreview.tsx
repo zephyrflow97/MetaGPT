@@ -18,9 +18,14 @@ import {
   Lock,
   Loader2,
   AlertCircle,
+  Share2,
+  Tag,
 } from 'lucide-react'
 import { Project, FileInfo } from '@/lib/types'
 import { cn, getFileLanguage, truncateText } from '@/lib/utils'
+import { ShareDialog } from './ShareDialog'
+import { TagSelector } from './TagSelector'
+import { TagManager } from './TagManager'
 
 interface CodePreviewProps {
   project: Project
@@ -55,6 +60,8 @@ export function CodePreview({
   const [editedContent, setEditedContent] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [showShareDialog, setShowShareDialog] = useState(false)
+  const [showTagManager, setShowTagManager] = useState(false)
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
 
   // Memoize file tree to avoid rebuilding on every render
@@ -229,6 +236,24 @@ export function CodePreview({
             </>
           )}
           <button
+            onClick={() => setShowTagManager(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                     bg-mgx-surface-light text-mgx-text-muted hover:text-mgx-accent
+                     text-xs font-medium transition-colors"
+            title="Manage Tags"
+          >
+            <Tag className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => setShowShareDialog(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                     bg-mgx-accent/10 text-mgx-accent hover:bg-mgx-accent/20
+                     text-xs font-medium transition-colors"
+          >
+            <Share2 className="w-3.5 h-3.5" />
+            Share
+          </button>
+          <button
             onClick={onDownload}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
                      bg-mgx-primary/10 text-mgx-primary hover:bg-mgx-primary/20
@@ -245,6 +270,11 @@ export function CodePreview({
             <X className="w-4 h-4" />
           </button>
         </div>
+      </div>
+      
+      {/* Tags for current project */}
+      <div className="px-4 py-2 border-b border-mgx-border bg-mgx-bg">
+        <TagSelector project={project} />
       </div>
 
       {/* Content */}
@@ -364,6 +394,17 @@ export function CodePreview({
           </div>
         )}
       </div>
+
+      {/* Dialogs */}
+      <ShareDialog
+        isOpen={showShareDialog}
+        project={project}
+        onClose={() => setShowShareDialog(false)}
+      />
+      <TagManager
+        isOpen={showTagManager}
+        onClose={() => setShowTagManager(false)}
+      />
     </div>
   )
 }

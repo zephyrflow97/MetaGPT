@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { Sidebar } from '@/components/Sidebar'
 import { ChatArea } from '@/components/ChatArea'
 import { CodePreview } from '@/components/CodePreview'
@@ -9,8 +11,12 @@ import { ProgressBar } from '@/components/ProgressBar'
 import { AgentStatusPanel } from '@/components/AgentStatusPanel'
 import { Message, Project, FileInfo, ConversationMode, ProgressInfo, AgentState, ProjectTemplate } from '@/lib/types'
 import { generateClientId } from '@/lib/utils'
+import { useAuth } from '@/lib/auth-context'
+import { Sparkles, ArrowRight, LogIn, UserPlus } from 'lucide-react'
 
 export default function Home() {
+  const router = useRouter()
+  const { token, isAuthenticated, isLoading: authLoading } = useAuth()
   const [messages, setMessages] = useState<Message[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [currentProject, setCurrentProject] = useState<Project | null>(null)
@@ -40,12 +46,13 @@ export default function Home() {
     return `${Date.now()}-${messageIdCounter.current}-${Math.random().toString(36).substring(2, 9)}`
   }
 
-  // Load projects on mount
+  // Load projects when auth state changes
   useEffect(() => {
     fetchProjects()
-  }, [])
+  }, [token])
 
   // Connect WebSocket - handle React Strict Mode double mount
+  // Reconnect when token changes
   useEffect(() => {
     let isMounted = true
     let ws: WebSocket | null = null
@@ -53,12 +60,16 @@ export default function Home() {
     const connect = () => {
       if (!isMounted) return
       
-      const wsUrl = `ws://localhost:8000/ws/chat/${clientIdRef.current}`
+      // Build WebSocket URL with optional token
+      let wsUrl = `ws://localhost:8000/ws/chat/${clientIdRef.current}`
+      if (token) {
+        wsUrl += `?token=${encodeURIComponent(token)}`
+      }
       ws = new WebSocket(wsUrl)
 
       ws.onopen = () => {
         if (isMounted) {
-          console.log('WebSocket connected')
+          console.log('WebSocket connected', token ? '(authenticated)' : '(anonymous)')
           wsRef.current = ws
         }
       }
@@ -93,7 +104,7 @@ export default function Home() {
       }
       wsRef.current = null
     }
-  }, [])
+  }, [token])
 
   const handleWebSocketMessage = (data: any) => {
     const messageProjectId = data.project_id
@@ -181,7 +192,11 @@ export default function Home() {
 
   const fetchProjects = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/projects')
+      const headers: HeadersInit = {}
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`
+      }
+      const response = await fetch('http://localhost:8000/api/projects', { headers })
       const data = await response.json()
       setProjects(data.projects || [])
     } catch (error) {
@@ -426,6 +441,73 @@ export default function Home() {
     window.open(
       `http://localhost:8000/api/projects/${currentProject.id}/download`,
       '_blank'
+    )
+  }
+
+  // Show loading state while checking authentication
+  if (authLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-mgx-bg">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-mgx-accent mx-auto mb-4"></div>
+          <p className="text-mgx-muted">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Show login required page if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-mgx-bg via-mgx-sidebar to-mgx-bg">
+        <div className="max-w-md w-full mx-4">
+          <div className="bg-mgx-card rounded-2xl shadow-2xl border border-mgx-border p-8">
+            {/* Logo & Title */}
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-mgx-accent to-purple-600 mb-4">
+                <Sparkles className="w-8 h-8 text-white" />
+              </div>
+              <h1 className="text-2xl font-bold text-mgx-text mb-2">
+                Welcome to MGX Clone
+              </h1>
+              <p className="text-mgx-muted">
+                AI-powered code generation platform
+              </p>
+            </div>
+
+            {/* Description */}
+            <div className="mb-8 p-4 bg-mgx-sidebar rounded-xl border border-mgx-border">
+              <p className="text-sm text-mgx-muted text-center">
+                Please log in to create and manage your AI-generated projects.
+              </p>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="space-y-3">
+              <Link
+                href="/login"
+                className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-gradient-to-r from-mgx-accent to-purple-600 hover:from-mgx-accent/90 hover:to-purple-500 text-white rounded-xl font-medium transition-all shadow-lg shadow-mgx-accent/20"
+              >
+                <LogIn className="w-5 h-5" />
+                Sign In
+                <ArrowRight className="w-4 h-4" />
+              </Link>
+              <Link
+                href="/register"
+                className="flex items-center justify-center gap-2 w-full py-3 px-4 bg-mgx-sidebar hover:bg-mgx-hover text-mgx-text border border-mgx-border rounded-xl font-medium transition-all"
+              >
+                <UserPlus className="w-5 h-5" />
+                Create Account
+              </Link>
+            </div>
+
+            {/* Footer */}
+            <p className="text-xs text-mgx-muted text-center mt-6">
+              Built with MetaGPT • Powered by AI
+            </p>
+          </div>
+        </div>
+      </div>
     )
   }
 

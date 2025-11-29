@@ -8,10 +8,11 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from mgx_clone.backend.core.deps import get_current_user, get_current_user_required
 from mgx_clone.backend.services.templates import (
     generate_prompt_from_template,
     get_all_templates,
@@ -20,11 +21,24 @@ from mgx_clone.backend.services.templates import (
     get_templates_by_category,
 )
 from mgx_clone.backend.storage.database import (
+    add_tag_to_project,
+    count_projects,
     create_project,
+    create_project_share,
+    create_tag,
+    delete_project_share,
+    delete_tag,
     get_all_projects,
     get_project,
+    get_project_by_share_token,
     get_project_messages,
+    get_project_share,
+    get_project_tags,
+    get_tag,
+    get_tags_by_user,
+    remove_tag_from_project,
     update_project_status,
+    update_tag,
 )
 
 router = APIRouter()
@@ -45,6 +59,7 @@ class ProjectResponse(BaseModel):
     created_at: str
     updated_at: str
     workspace_path: Optional[str] = None
+    user_id: Optional[str] = None
 
 
 class ProjectListResponse(BaseModel):
@@ -53,25 +68,110 @@ class ProjectListResponse(BaseModel):
     total: int
 
 
+class ShareRequest(BaseModel):
+    """Request model for creating/updating share"""
+    is_public: bool = True
+    expires_at: Optional[str] = None
+
+
+class ShareResponse(BaseModel):
+    """Response model for share info"""
+    id: str
+    project_id: str
+    share_token: str
+    is_public: bool
+    expires_at: Optional[str] = None
+    view_count: int
+    created_at: str
+    share_url: str
+
+
+class TagCreate(BaseModel):
+    """Request model for creating a tag"""
+    name: str
+    color: str = "#3B82F6"
+
+
+class TagResponse(BaseModel):
+    """Response model for tag"""
+    id: str
+    user_id: str
+    name: str
+    color: str
+    created_at: str
+
+
+class TagUpdate(BaseModel):
+    """Request model for updating a tag"""
+    name: Optional[str] = None
+    color: Optional[str] = None
+
+
+class TagListResponse(BaseModel):
+    """Response model for tag list"""
+    tags: list[TagResponse]
+
+
 @router.post("/projects", response_model=ProjectResponse)
-async def create_new_project(project: ProjectCreate):
-    """Create a new project"""
+async def create_new_project(
+    project: ProjectCreate,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Create a new project (requires authentication)"""
     try:
-        result = await create_project(project.name, project.requirement)
+        result = await create_project(project.name, project.requirement, user_id=current_user["id"])
         return ProjectResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/projects", response_model=ProjectListResponse)
-async def list_projects(skip: int = 0, limit: int = 20):
-    """Get all projects with pagination"""
+async def list_projects(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
+    tag: Optional[str] = None,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Get all projects with pagination, search, and tag filter (requires authentication)"""
     try:
-        projects = await get_all_projects(skip=skip, limit=limit)
+        projects = await get_all_projects(
+            skip=skip,
+            limit=limit,
+            user_id=current_user["id"],
+            search=search,
+            tag_id=tag
+        )
+        total = await count_projects(user_id=current_user["id"], search=search, tag_id=tag)
         return ProjectListResponse(
             projects=[ProjectResponse(**p) for p in projects],
-            total=len(projects)
+            total=total
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/projects/search")
+async def search_projects(
+    q: str,
+    skip: int = 0,
+    limit: int = 20,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Search projects by name or requirement (requires authentication)"""
+    try:
+        projects = await get_all_projects(
+            skip=skip,
+            limit=limit,
+            user_id=current_user["id"],
+            search=q
+        )
+        total = await count_projects(user_id=current_user["id"], search=q)
+        return {
+            "projects": [ProjectResponse(**p) for p in projects],
+            "total": total,
+            "query": q
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -422,6 +522,359 @@ async def preview_project_file(project_id: str, file_path: str):
         media_type = media_types.get(suffix, 'application/octet-stream')
         
         return FileResponse(path=full_path, media_type=media_type)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Project Sharing API ====================
+
+
+@router.post("/projects/{project_id}/share", response_model=ShareResponse)
+async def create_share(
+    project_id: str,
+    request: ShareRequest,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Create or update a share link for a project"""
+    try:
+        project = await get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Check ownership
+        if project.get("user_id") and project["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized to share this project")
+        
+        share = await create_project_share(
+            project_id=project_id,
+            is_public=request.is_public,
+            expires_at=request.expires_at
+        )
+        
+        share_url = f"http://localhost:3000/shared/{share['share_token']}"
+        
+        return ShareResponse(
+            id=share["id"],
+            project_id=share["project_id"],
+            share_token=share["share_token"],
+            is_public=bool(share["is_public"]),
+            expires_at=share.get("expires_at"),
+            view_count=share.get("view_count", 0),
+            created_at=share["created_at"],
+            share_url=share_url
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/projects/{project_id}/share")
+async def get_share_info(
+    project_id: str,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Get share info for a project"""
+    try:
+        project = await get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Check ownership
+        if project.get("user_id") and project["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        share = await get_project_share(project_id)
+        if not share:
+            return {"shared": False}
+        
+        share_url = f"http://localhost:3000/shared/{share['share_token']}"
+        
+        return {
+            "shared": True,
+            "share": ShareResponse(
+                id=share["id"],
+                project_id=share["project_id"],
+                share_token=share["share_token"],
+                is_public=bool(share["is_public"]),
+                expires_at=share.get("expires_at"),
+                view_count=share.get("view_count", 0),
+                created_at=share["created_at"],
+                share_url=share_url
+            )
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/projects/{project_id}/share")
+async def remove_share(
+    project_id: str,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Remove share link for a project"""
+    try:
+        project = await get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Check ownership
+        if project.get("user_id") and project["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        await delete_project_share(project_id)
+        return {"message": "Share removed successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/shared/{share_token}")
+async def get_shared_project(
+    share_token: str,
+    current_user: Optional[dict] = Depends(get_current_user)
+):
+    """Access a shared project by token"""
+    try:
+        project = await get_project_by_share_token(share_token)
+        if not project:
+            raise HTTPException(status_code=404, detail="Shared project not found or expired")
+        
+        share_info = project.pop("share_info", {})
+        
+        # Check if login is required
+        if not share_info.get("is_public") and not current_user:
+            raise HTTPException(
+                status_code=401,
+                detail="Login required to view this shared project"
+            )
+        
+        return {
+            "project": ProjectResponse(**project),
+            "share_info": {
+                "is_public": bool(share_info.get("is_public")),
+                "view_count": share_info.get("view_count", 0)
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/shared/{share_token}/files")
+async def get_shared_project_files(
+    share_token: str,
+    limit: int = MAX_FILES,
+    current_user: Optional[dict] = Depends(get_current_user)
+):
+    """Get files of a shared project"""
+    try:
+        project = await get_project_by_share_token(share_token)
+        if not project:
+            raise HTTPException(status_code=404, detail="Shared project not found or expired")
+        
+        share_info = project.get("share_info", {})
+        
+        # Check if login is required
+        if not share_info.get("is_public") and not current_user:
+            raise HTTPException(
+                status_code=401,
+                detail="Login required to view this shared project"
+            )
+        
+        # Reuse the get_project_files logic
+        workspace_path = project.get("workspace_path")
+        if not workspace_path or not Path(workspace_path).exists():
+            return {"files": [], "total": 0, "truncated": False}
+        
+        files = []
+        total_count = 0
+        workspace = Path(workspace_path)
+        
+        import os
+        for root, dirs, filenames in os.walk(workspace):
+            dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS and not d.endswith(".egg-info")]
+            
+            root_path = Path(root)
+            for filename in filenames:
+                file_path = root_path / filename
+                relative_path = file_path.relative_to(workspace)
+                
+                if str(relative_path).startswith("."):
+                    continue
+                
+                total_count += 1
+                
+                if len(files) < limit:
+                    files.append({
+                        "name": filename,
+                        "path": str(relative_path),
+                        "size": 0,
+                        "extension": file_path.suffix,
+                    })
+        
+        return {
+            "files": files,
+            "total": total_count,
+            "truncated": total_count > limit,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Tags API ====================
+
+
+@router.get("/tags", response_model=TagListResponse)
+async def list_user_tags(
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Get all tags for the current user"""
+    try:
+        tags = await get_tags_by_user(current_user["id"])
+        return TagListResponse(tags=[TagResponse(**t) for t in tags])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/tags", response_model=TagResponse, status_code=201)
+async def create_new_tag(
+    request: TagCreate,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Create a new tag"""
+    try:
+        tag = await create_tag(
+            user_id=current_user["id"],
+            name=request.name,
+            color=request.color
+        )
+        return TagResponse(**tag)
+    except Exception as e:
+        if "UNIQUE constraint failed" in str(e):
+            raise HTTPException(status_code=409, detail="Tag with this name already exists")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/tags/{tag_id}", response_model=TagResponse)
+async def update_existing_tag(
+    tag_id: str,
+    request: TagUpdate,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Update a tag"""
+    try:
+        tag = await get_tag(tag_id)
+        if not tag:
+            raise HTTPException(status_code=404, detail="Tag not found")
+        
+        if tag["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        updated = await update_tag(
+            tag_id=tag_id,
+            name=request.name,
+            color=request.color
+        )
+        return TagResponse(**updated)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/tags/{tag_id}")
+async def delete_existing_tag(
+    tag_id: str,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Delete a tag"""
+    try:
+        tag = await get_tag(tag_id)
+        if not tag:
+            raise HTTPException(status_code=404, detail="Tag not found")
+        
+        if tag["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        await delete_tag(tag_id)
+        return {"message": "Tag deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/projects/{project_id}/tags/{tag_id}")
+async def add_tag_to_project_endpoint(
+    project_id: str,
+    tag_id: str,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Add a tag to a project"""
+    try:
+        project = await get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Check ownership
+        if project.get("user_id") and project["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        tag = await get_tag(tag_id)
+        if not tag or tag["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=404, detail="Tag not found")
+        
+        await add_tag_to_project(project_id, tag_id)
+        return {"message": "Tag added successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/projects/{project_id}/tags/{tag_id}")
+async def remove_tag_from_project_endpoint(
+    project_id: str,
+    tag_id: str,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Remove a tag from a project"""
+    try:
+        project = await get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Check ownership
+        if project.get("user_id") and project["user_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized")
+        
+        await remove_tag_from_project(project_id, tag_id)
+        return {"message": "Tag removed successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/projects/{project_id}/tags", response_model=TagListResponse)
+async def get_project_tags_endpoint(project_id: str):
+    """Get all tags for a project"""
+    try:
+        project = await get_project(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        tags = await get_project_tags(project_id)
+        return TagListResponse(tags=[TagResponse(**t) for t in tags])
     except HTTPException:
         raise
     except Exception as e:
