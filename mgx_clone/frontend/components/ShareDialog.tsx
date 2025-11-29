@@ -110,11 +110,19 @@ export function ShareDialog({ isOpen, project, onClose }: ShareDialogProps) {
     }
   }
 
+  // 前端自己拼接分享链接，使用当前访问的域名
+  const getShareUrl = () => {
+    if (!shareInfo) return ''
+    // 使用 window.location.origin 获取当前访问地址（支持公网部署）
+    const origin = typeof window !== 'undefined' ? window.location.origin : ''
+    return `${origin}/shared/${shareInfo.share_token}`
+  }
+
   const copyToClipboard = async () => {
     if (!shareInfo) return
     
     try {
-      await navigator.clipboard.writeText(shareInfo.share_url)
+      await navigator.clipboard.writeText(getShareUrl())
       setIsCopied(true)
       setTimeout(() => setIsCopied(false), 2000)
     } catch (err) {
@@ -215,7 +223,7 @@ export function ShareDialog({ isOpen, project, onClose }: ShareDialogProps) {
             <div className="flex gap-2">
               <input
                 type="text"
-                value={shareInfo.share_url}
+                value={getShareUrl()}
                 readOnly
                 className="flex-1 px-4 py-2 bg-mgx-bg-tertiary border border-mgx-border rounded-lg
                            text-mgx-text-primary text-sm"

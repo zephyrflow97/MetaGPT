@@ -3,6 +3,7 @@
 """
 Configuration settings for MGX Clone
 """
+import os
 import secrets
 from functools import lru_cache
 from typing import Optional
@@ -25,11 +26,13 @@ class Settings(BaseSettings):
     # Password reset
     PASSWORD_RESET_TOKEN_EXPIRE_HOURS: int = 1
     
-    # CORS
-    CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    # CORS - 允许所有来源（公网部署时需要）
+    # 可通过环境变量 CORS_ORIGINS 配置，格式: "http://example.com,http://localhost:3000"
+    CORS_ORIGINS: list[str] = ["*"]
     
-    # Frontend URL for password reset links
-    FRONTEND_URL: str = "http://localhost:3000"
+    # Frontend URL for share links and password reset
+    # 可通过环境变量 FRONTEND_URL 配置，如: "http://136.110.50.15:3000"
+    FRONTEND_URL: str = os.environ.get("FRONTEND_URL", "http://localhost:3000")
     
     class Config:
         env_file = ".env"

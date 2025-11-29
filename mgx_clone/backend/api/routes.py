@@ -8,10 +8,11 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from mgx_clone.backend.core.config import settings
 from mgx_clone.backend.core.deps import get_current_user, get_current_user_required
 from mgx_clone.backend.services.templates import (
     generate_prompt_from_template,
@@ -553,7 +554,7 @@ async def create_share(
             expires_at=request.expires_at
         )
         
-        share_url = f"http://localhost:3000/shared/{share['share_token']}"
+        share_url = f"{settings.FRONTEND_URL}/shared/{share['share_token']}"
         
         return ShareResponse(
             id=share["id"],
@@ -590,7 +591,7 @@ async def get_share_info(
         if not share:
             return {"shared": False}
         
-        share_url = f"http://localhost:3000/shared/{share['share_token']}"
+        share_url = f"{settings.FRONTEND_URL}/shared/{share['share_token']}"
         
         return {
             "shared": True,
