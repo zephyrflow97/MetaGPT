@@ -12,6 +12,13 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from mgx_clone.backend.services.templates import (
+    generate_prompt_from_template,
+    get_all_templates,
+    get_categories,
+    get_template,
+    get_templates_by_category,
+)
 from mgx_clone.backend.storage.database import (
     create_project,
     get_all_projects,
@@ -215,6 +222,80 @@ async def delete_project(project_id: str):
 async def get_history(skip: int = 0, limit: int = 50):
     """Get project history (alias for list_projects)"""
     return await list_projects(skip=skip, limit=limit)
+
+
+# ==================== Templates API ====================
+
+
+@router.get("/templates")
+async def list_templates(category: Optional[str] = None):
+    """Get all available project templates"""
+    try:
+        if category:
+            templates = get_templates_by_category(category)
+        else:
+            templates = get_all_templates()
+        return {"templates": templates, "total": len(templates)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/templates/categories")
+async def list_template_categories():
+    """Get all template categories"""
+    try:
+        categories = get_categories()
+        return {"categories": categories}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/templates/{template_id}")
+async def get_template_detail(template_id: str):
+    """Get a specific template by ID"""
+    try:
+        template = get_template(template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found")
+        return template
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class GeneratePromptRequest(BaseModel):
+    """Request model for generating prompt from template"""
+    template_id: str
+    project_name: str = "My Project"
+    selected_features: Optional[list[str]] = None
+    custom_requirements: Optional[str] = None
+
+
+@router.post("/templates/generate-prompt")
+async def generate_template_prompt(request: GeneratePromptRequest):
+    """Generate a complete prompt from a template"""
+    try:
+        template = get_template(request.template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found")
+        
+        prompt = generate_prompt_from_template(
+            template_id=request.template_id,
+            project_name=request.project_name,
+            selected_features=request.selected_features,
+            custom_requirements=request.custom_requirements,
+        )
+        
+        return {
+            "prompt": prompt,
+            "template_name": template["name"],
+            "project_name": request.project_name,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/projects/{project_id}/preview/{file_path:path}")

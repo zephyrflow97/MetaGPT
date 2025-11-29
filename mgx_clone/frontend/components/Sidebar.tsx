@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Plus, MessageSquare, FolderOpen, ChevronDown, Sparkles } from 'lucide-react'
+import { Plus, MessageSquare, FolderOpen, ChevronDown, Sparkles, Layout } from 'lucide-react'
 import { Project } from '@/lib/types'
 import { cn, formatDate, getStatusColor, getStatusIcon, truncateText } from '@/lib/utils'
 
@@ -10,6 +10,7 @@ interface SidebarProps {
   currentProject: Project | null
   onSelectProject: (project: Project) => void
   onNewChat: () => void
+  onOpenTemplates?: () => void
 }
 
 export function Sidebar({
@@ -17,6 +18,7 @@ export function Sidebar({
   currentProject,
   onSelectProject,
   onNewChat,
+  onOpenTemplates,
 }: SidebarProps) {
   const [isProjectsExpanded, setIsProjectsExpanded] = useState(true)
 
@@ -44,17 +46,31 @@ export function Sidebar({
           </div>
         </div>
 
-        {/* New Chat Button */}
-        <button
-          onClick={onNewChat}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 
-                   bg-mgx-primary hover:bg-mgx-primary-hover rounded-lg
-                   text-white font-medium transition-all duration-200
-                   hover:shadow-lg hover:shadow-mgx-primary/25"
-        >
-          <Plus className="w-4 h-4" />
-          New Project
-        </button>
+        {/* Action Buttons */}
+        <div className="flex gap-2">
+          <button
+            onClick={onNewChat}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 
+                     bg-mgx-primary hover:bg-mgx-primary-hover rounded-lg
+                     text-white font-medium transition-all duration-200
+                     hover:shadow-lg hover:shadow-mgx-primary/25"
+          >
+            <Plus className="w-4 h-4" />
+            New Project
+          </button>
+          {onOpenTemplates && (
+            <button
+              onClick={onOpenTemplates}
+              className="flex items-center justify-center px-3 py-2.5 
+                       bg-mgx-surface-light hover:bg-mgx-accent/20 rounded-lg
+                       text-mgx-text-muted hover:text-mgx-accent
+                       transition-all duration-200 border border-mgx-border hover:border-mgx-accent/30"
+              title="Use Template"
+            >
+              <Layout className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Projects List */}

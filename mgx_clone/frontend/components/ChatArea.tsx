@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { Send, Sparkles, Bot, User, AlertCircle, CheckCircle2, RefreshCw, MessageSquarePlus } from 'lucide-react'
+import { Send, Sparkles, Bot, User, AlertCircle, CheckCircle2, RefreshCw, MessageSquarePlus, RotateCcw } from 'lucide-react'
 import { Message, ConversationMode, Project } from '@/lib/types'
 import { cn, formatTimestamp, getAgentColor } from '@/lib/utils'
 
@@ -12,6 +12,7 @@ interface ChatAreaProps {
   showPreview: boolean
   currentProject?: Project | null
   onRegenerate?: () => void
+  onRetry?: () => void
   conversationMode?: ConversationMode
 }
 
@@ -22,6 +23,7 @@ export function ChatArea({
   showPreview,
   currentProject,
   onRegenerate,
+  onRetry,
   conversationMode = 'new_project',
 }: ChatAreaProps) {
   const [input, setInput] = useState('')
@@ -177,6 +179,22 @@ export function ChatArea({
                       )}>
                         {message.content}
                       </div>
+                      
+                      {/* Retry button for error messages */}
+                      {message.type === 'error' && message.canRetry && onRetry && (
+                        <button
+                          onClick={onRetry}
+                          disabled={isGenerating}
+                          className="mt-3 flex items-center gap-2 px-4 py-2 
+                                   bg-mgx-error/10 hover:bg-mgx-error/20 
+                                   text-mgx-error rounded-lg text-sm font-medium
+                                   transition-all duration-200 border border-mgx-error/20
+                                   disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <RotateCcw className="w-4 h-4" />
+                          Retry Generation
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

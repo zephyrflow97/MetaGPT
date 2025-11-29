@@ -1,4 +1,7 @@
 export { Sidebar } from './Sidebar'
 export { ChatArea } from './ChatArea'
 export { CodePreview } from './CodePreview'
+export { TemplateSelector } from './TemplateSelector'
+export { ProgressBar } from './ProgressBar'
+export { AgentStatusPanel } from './AgentStatusPanel'
 

@@ -4,7 +4,10 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Sidebar } from '@/components/Sidebar'
 import { ChatArea } from '@/components/ChatArea'
 import { CodePreview } from '@/components/CodePreview'
-import { Message, Project, FileInfo, ConversationMode } from '@/lib/types'
+import { TemplateSelector } from '@/components/TemplateSelector'
+import { ProgressBar } from '@/components/ProgressBar'
+import { AgentStatusPanel } from '@/components/AgentStatusPanel'
+import { Message, Project, FileInfo, ConversationMode, ProgressInfo, AgentState, ProjectTemplate } from '@/lib/types'
 import { generateClientId } from '@/lib/utils'
 
 export default function Home() {
@@ -18,6 +21,10 @@ export default function Home() {
   const [fileContent, setFileContent] = useState<string>('')
   const [projectFiles, setProjectFiles] = useState<FileInfo[]>([])
   const [conversationMode, setConversationMode] = useState<ConversationMode>('new_project')
+  const [showTemplateSelector, setShowTemplateSelector] = useState(false)
+  const [progressInfo, setProgressInfo] = useState<ProgressInfo | null>(null)
+  const [agentStates, setAgentStates] = useState<AgentState[]>([])
+  const [failedProjectId, setFailedProjectId] = useState<string | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef<string>(generateClientId())
   const messageIdCounter = useRef<number>(0)
@@ -89,6 +96,25 @@ export default function Home() {
     const messageProjectId = data.project_id
     const conversationRound = data.conversation_round
     
+    // Handle progress updates
+    if (data.type === 'progress') {
+      if (data.progress) {
+        setProgressInfo(data.progress)
+      }
+      if (data.agent_states) {
+        setAgentStates(data.agent_states)
+      }
+      return  // Don't create a message for progress updates
+    }
+    
+    // Handle agent status updates
+    if (data.type === 'agent_status') {
+      if (data.agent_states) {
+        setAgentStates(data.agent_states)
+      }
+      return  // Don't create a message for agent status updates
+    }
+    
     const newMessage: Message = {
       id: generateMessageId(),
       type: data.type,
@@ -97,6 +123,7 @@ export default function Home() {
       timestamp: new Date().toISOString(),
       projectId: messageProjectId,
       conversationRound: conversationRound,
+      canRetry: data.can_retry,
     }
 
     // Only add message if it belongs to the currently active project
@@ -113,7 +140,7 @@ export default function Home() {
         const lastUserMessage = userMessages[userMessages.length - 1]
         return lastUserMessage ? [lastUserMessage, newMessage] : [newMessage]
       })
-    } else if (data.type === 'status' && (data.status === 'continuing' || data.status === 'regenerating')) {
+    } else if (data.type === 'status' && (data.status === 'continuing' || data.status === 'regenerating' || data.status === 'retrying')) {
       // Continuing conversation on existing project
       activeProjectIdRef.current = messageProjectId
       setActiveProjectId(messageProjectId)
@@ -130,6 +157,9 @@ export default function Home() {
     } else if (data.type === 'complete') {
       setMessages((prev) => [...prev, newMessage])
       setIsGenerating(false)
+      setProgressInfo(null)  // Clear progress
+      setAgentStates([])  // Clear agent states
+      setFailedProjectId(null)  // Clear failed project
       // Don't clear active project for continued conversations - keep it selected
       fetchProjects()
       if (messageProjectId) {
@@ -138,6 +168,11 @@ export default function Home() {
     } else if (data.type === 'error') {
       setMessages((prev) => [...prev, newMessage])
       setIsGenerating(false)
+      setProgressInfo(null)
+      // Track failed project for retry
+      if (data.can_retry && messageProjectId) {
+        setFailedProjectId(messageProjectId)
+      }
     }
   }
 
@@ -292,10 +327,76 @@ export default function Home() {
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       setIsGenerating(true)
+      setAgentStates([])  // Reset agent states
+      setProgressInfo(null)  // Reset progress
       wsRef.current.send(
         JSON.stringify({
           type: 'regenerate_project',
           project_id: currentProject.id,
+        })
+      )
+    }
+  }
+
+  const handleRetryProject = (projectId: string) => {
+    if (isGenerating) return
+
+    // Add retry message
+    const retryMessage: Message = {
+      id: generateMessageId(),
+      type: 'user',
+      agent: 'User',
+      content: '🔄 Retry project generation',
+      timestamp: new Date().toISOString(),
+      projectId: projectId,
+    }
+    setMessages((prev) => [...prev, retryMessage])
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setIsGenerating(true)
+      setFailedProjectId(null)
+      setAgentStates([])
+      setProgressInfo(null)
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'retry_project',
+          project_id: projectId,
+        })
+      )
+    }
+  }
+
+  const handleTemplateSelect = (
+    template: ProjectTemplate, 
+    features: string[], 
+    customRequirements: string, 
+    projectName: string
+  ) => {
+    if (isGenerating) return
+
+    // Add user message showing template selection
+    const userMessage: Message = {
+      id: generateMessageId(),
+      type: 'user',
+      agent: 'User',
+      content: `📋 Create from template: ${template.name}\n\nProject: ${projectName}\nFeatures: ${features.join(', ')}${customRequirements ? `\n\nAdditional: ${customRequirements}` : ''}`,
+      timestamp: new Date().toISOString(),
+    }
+    setMessages((prev) => [...prev, userMessage])
+
+    // Send to WebSocket
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setIsGenerating(true)
+      setShowTemplateSelector(false)
+      setAgentStates([])
+      setProgressInfo(null)
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'create_from_template',
+          template_id: template.id,
+          name: projectName,
+          features: features,
+          custom_requirements: customRequirements,
         })
       )
     }
@@ -329,25 +430,54 @@ export default function Home() {
             setActiveProjectId(null)
             setShowPreview(false)
             setConversationMode('new_project')
+            setProgressInfo(null)
+            setAgentStates([])
+            setFailedProjectId(null)
           }
         }}
+        onOpenTemplates={() => setShowTemplateSelector(true)}
       />
 
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Chat Area */}
-        <ChatArea
-          messages={messages}
-          isGenerating={isGenerating}
-          onSendMessage={handleSendMessage}
-          showPreview={showPreview}
-          currentProject={currentProject}
-          onRegenerate={handleRegenerateProject}
-          conversationMode={conversationMode}
-        />
+        {/* Chat Area with Progress */}
+        <div className="flex flex-col flex-1 overflow-hidden">
+          {/* Progress Bar - Shows during generation */}
+          {isGenerating && (
+            <div className="px-6 pt-4">
+              <ProgressBar
+                progress={progressInfo}
+                agentStates={agentStates}
+                isGenerating={isGenerating}
+              />
+            </div>
+          )}
+          
+          {/* Chat Area */}
+          <ChatArea
+            messages={messages}
+            isGenerating={isGenerating}
+            onSendMessage={handleSendMessage}
+            showPreview={showPreview}
+            currentProject={currentProject}
+            onRegenerate={handleRegenerateProject}
+            onRetry={failedProjectId ? () => handleRetryProject(failedProjectId) : undefined}
+            conversationMode={conversationMode}
+          />
+        </div>
+
+        {/* Agent Status Panel - Shows during generation */}
+        {isGenerating && agentStates.length > 0 && (
+          <div className="w-72 border-l border-mgx-border p-4 overflow-y-auto">
+            <AgentStatusPanel
+              agentStates={agentStates}
+              isGenerating={isGenerating}
+            />
+          </div>
+        )}
 
         {/* Code Preview */}
-        {showPreview && currentProject && (
+        {showPreview && currentProject && !isGenerating && (
           <CodePreview
             project={currentProject}
             files={projectFiles}
@@ -360,6 +490,13 @@ export default function Home() {
           />
         )}
       </div>
+
+      {/* Template Selector Modal */}
+      <TemplateSelector
+        isOpen={showTemplateSelector}
+        onClose={() => setShowTemplateSelector(false)}
+        onSelectTemplate={handleTemplateSelect}
+      />
     </div>
   )
 }
