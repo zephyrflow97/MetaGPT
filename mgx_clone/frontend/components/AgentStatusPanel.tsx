@@ -10,8 +10,14 @@ interface AgentStatusPanelProps {
   isGenerating: boolean
 }
 
-// Agent icons mapping
+// Agent icons mapping (using actual role names from MetaGPT)
 const AGENT_ICONS: Record<string, string> = {
+  'Mike': '👨‍💼',      // Team Leader
+  'Mia': '📋',         // Product Manager
+  'Alex': '👨‍💻',      // Engineer
+  'Archer': '🏗️',     // Architect
+  'Dino': '📊',        // Data Analyst
+  // Fallback for role names
   'Team Leader': '👨‍💼',
   'Product Manager': '📋',
   'Architect': '🏗️',
@@ -19,13 +25,25 @@ const AGENT_ICONS: Record<string, string> = {
   'Data Analyst': '📊',
 }
 
+// Default agent list when no states received yet (using actual role names)
+const DEFAULT_AGENTS: AgentState[] = [
+  { name: 'Mike', state: 'pending', description: 'Team Leader - Analyzing requirements' },
+  { name: 'Mia', state: 'pending', description: 'Product Manager - Creating specification' },
+  { name: 'Alex', state: 'pending', description: 'Engineer - Implementing code' },
+  { name: 'Archer', state: 'pending', description: 'Architect - Designing architecture' },
+  { name: 'Dino', state: 'pending', description: 'Data Analyst - Analyzing data' },
+]
+
 export function AgentStatusPanel({ agentStates, isGenerating }: AgentStatusPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true)
+  
+  // Use default agents if no states received yet during generation
+  const displayAgents = agentStates.length > 0 ? agentStates : (isGenerating ? DEFAULT_AGENTS : [])
 
-  if (!isGenerating && agentStates.length === 0) return null
+  if (!isGenerating && displayAgents.length === 0) return null
 
-  const activeAgents = agentStates.filter(a => a.state === 'active').length
-  const completedAgents = agentStates.filter(a => a.state === 'completed').length
+  const activeAgents = displayAgents.filter(a => a.state === 'active').length
+  const completedAgents = displayAgents.filter(a => a.state === 'completed').length
 
   return (
     <div className="bg-mgx-surface rounded-xl border border-mgx-border overflow-hidden animate-in slide-in-from-right duration-300">
@@ -46,7 +64,7 @@ export function AgentStatusPanel({ agentStates, isGenerating }: AgentStatusPanel
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs text-mgx-text-muted">
-            {completedAgents}/{agentStates.length} completed
+            {completedAgents}/{displayAgents.length} completed
           </span>
           {isExpanded ? (
             <ChevronUp className="w-4 h-4 text-mgx-text-muted" />
@@ -58,15 +76,15 @@ export function AgentStatusPanel({ agentStates, isGenerating }: AgentStatusPanel
 
       {/* Agent List */}
       {isExpanded && (
-        <div className="px-4 pb-4 space-y-2">
-          {agentStates.map((agent, idx) => (
+        <div className="px-4 pb-4 space-y-2 max-h-[calc(100vh-200px)] overflow-y-auto">
+          {displayAgents.map((agent, idx) => (
             <div
               key={agent.name}
               className={cn(
                 'flex items-center gap-3 p-3 rounded-lg transition-all duration-300',
                 agent.state === 'active' && 'bg-mgx-primary/10 border border-mgx-primary/20',
                 agent.state === 'completed' && 'bg-mgx-success/5 border border-mgx-success/10',
-                agent.state === 'pending' && 'bg-mgx-surface-light/50'
+                agent.state === 'pending' && 'bg-mgx-surface-light/50 border border-transparent'
               )}
               style={{ 
                 animationDelay: `${idx * 100}ms`,
@@ -74,7 +92,7 @@ export function AgentStatusPanel({ agentStates, isGenerating }: AgentStatusPanel
             >
               {/* Agent Avatar */}
               <div className={cn(
-                'w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all',
+                'w-10 h-10 rounded-full flex items-center justify-center text-lg transition-all shrink-0',
                 agent.state === 'active' && 'bg-mgx-primary/20',
                 agent.state === 'completed' && 'bg-mgx-success/20',
                 agent.state === 'pending' && 'bg-mgx-surface-light opacity-50'
@@ -107,7 +125,7 @@ export function AgentStatusPanel({ agentStates, isGenerating }: AgentStatusPanel
 
               {/* Status Icon */}
               <div className={cn(
-                'w-6 h-6 rounded-full flex items-center justify-center transition-all',
+                'w-6 h-6 rounded-full flex items-center justify-center transition-all shrink-0',
                 agent.state === 'completed' && 'bg-mgx-success text-white',
                 agent.state === 'active' && 'bg-mgx-primary text-white',
                 agent.state === 'pending' && 'bg-mgx-surface-light text-mgx-text-muted'
@@ -127,4 +145,3 @@ export function AgentStatusPanel({ agentStates, isGenerating }: AgentStatusPanel
     </div>
   )
 }
-

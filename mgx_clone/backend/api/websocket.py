@@ -101,13 +101,24 @@ class PendingQuestionManager:
 pending_questions = PendingQuestionManager()
 
 # Agent 列表用于进度追踪
+# 注意：MetaGPT 的角色名称可能因配置而异，这里列出常见的角色名称变体
+# display 使用实际角色名（与对话中显示的名称一致）
 AGENT_WORKFLOW = [
-    {"name": "TeamLeader", "display": "Team Leader", "description": "Analyzing requirements"},
-    {"name": "ProductManager", "display": "Product Manager", "description": "Creating product specification"},
-    {"name": "Architect", "display": "Architect", "description": "Designing system architecture"},
-    {"name": "Engineer2", "display": "Engineer", "description": "Implementing code"},
-    {"name": "DataAnalyst", "display": "Data Analyst", "description": "Analyzing data requirements"},
+    {"name": "Mike", "aliases": ["TeamLeader", "Team Leader"], "display": "Mike", "role": "Team Leader", "description": "Analyzing requirements and coordinating"},
+    {"name": "Mia", "aliases": ["ProductManager", "Product Manager"], "display": "Mia", "role": "Product Manager", "description": "Creating product specification"},
+    {"name": "Alex", "aliases": ["Engineer", "Engineer2"], "display": "Alex", "role": "Engineer", "description": "Implementing code"},
+    {"name": "Archer", "aliases": ["Architect"], "display": "Archer", "role": "Architect", "description": "Designing system architecture"},
+    {"name": "Dino", "aliases": ["DataAnalyst", "Data Analyst"], "display": "Dino", "role": "Data Analyst", "description": "Analyzing data requirements"},
 ]
+
+# 创建 agent 名称到索引的映射（包括别名）
+AGENT_NAME_MAP = {}
+for idx, agent in enumerate(AGENT_WORKFLOW):
+    AGENT_NAME_MAP[agent["name"]] = idx
+    AGENT_NAME_MAP[agent["display"]] = idx
+    AGENT_NAME_MAP[agent["role"]] = idx
+    for alias in agent.get("aliases", []):
+        AGENT_NAME_MAP[alias] = idx
 
 
 class ConnectionManager:
@@ -309,24 +320,28 @@ async def handle_create_project(client_id: str, message: dict):
             message_type=msg_type
         )
         
-        # Update progress tracking
-        if msg_type == "agent_message" and agent not in agent_progress["agents_seen"]:
+        # Update progress tracking (for agent_message and reply_to_human messages)
+        if msg_type in ("agent_message", "reply_to_human") and agent not in agent_progress["agents_seen"]:
             agent_progress["agents_seen"].add(agent)
-            # Find agent index
-            for idx, a in enumerate(AGENT_WORKFLOW):
-                if a["name"] == agent or a["display"] == agent:
-                    agent_progress["current_idx"] = idx + 1
-                    break
+            # Find agent index using name map (includes aliases)
+            if agent in AGENT_NAME_MAP:
+                agent_progress["current_idx"] = AGENT_NAME_MAP[agent] + 1
             
             # Send progress update
             total = len(AGENT_WORKFLOW)
             current = agent_progress["current_idx"]
             percentage = int((current / total) * 100)
             
-            # Build agent states
+            # Build agent states - check if any agent name or alias is in seen set
             agent_states = []
             for idx, a in enumerate(AGENT_WORKFLOW):
-                if a["name"] in agent_progress["agents_seen"] or a["display"] in agent_progress["agents_seen"]:
+                # Check if this agent has been seen (by name, display name, or alias)
+                is_seen = (
+                    a["name"] in agent_progress["agents_seen"] or 
+                    a["display"] in agent_progress["agents_seen"] or 
+                    any(alias in agent_progress["agents_seen"] for alias in a.get("aliases", []))
+                )
+                if is_seen:
                     state = "completed" if idx < agent_progress["current_idx"] - 1 else "active"
                 else:
                     state = "pending"
@@ -783,18 +798,24 @@ async def handle_retry_project(client_id: str, message: dict):
         # Update progress tracking
         if msg_type == "agent_message" and agent not in agent_progress["agents_seen"]:
             agent_progress["agents_seen"].add(agent)
-            for idx, a in enumerate(AGENT_WORKFLOW):
-                if a["name"] == agent or a["display"] == agent:
-                    agent_progress["current_idx"] = idx + 1
-                    break
+            # Find agent index using name map (includes aliases)
+            if agent in AGENT_NAME_MAP:
+                agent_progress["current_idx"] = AGENT_NAME_MAP[agent] + 1
             
             total = len(AGENT_WORKFLOW)
             current = agent_progress["current_idx"]
             percentage = int((current / total) * 100)
             
+            # Build agent states - check if any agent name or alias is in seen set
             agent_states = []
             for idx, a in enumerate(AGENT_WORKFLOW):
-                if a["name"] in agent_progress["agents_seen"] or a["display"] in agent_progress["agents_seen"]:
+                # Check if this agent has been seen (by name, display name, or alias)
+                is_seen = (
+                    a["name"] in agent_progress["agents_seen"] or 
+                    a["display"] in agent_progress["agents_seen"] or 
+                    any(alias in agent_progress["agents_seen"] for alias in a.get("aliases", []))
+                )
+                if is_seen:
                     state = "completed" if idx < agent_progress["current_idx"] - 1 else "active"
                 else:
                     state = "pending"

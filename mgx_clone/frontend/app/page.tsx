@@ -116,7 +116,13 @@ export default function Home() {
     // Handle progress updates
     if (data.type === 'progress') {
       if (data.progress) {
-        setProgressInfo(data.progress)
+        // Convert snake_case to camelCase for currentAgent
+        setProgressInfo({
+          current: data.progress.current,
+          total: data.progress.total,
+          percentage: data.progress.percentage,
+          currentAgent: data.progress.current_agent,  // Map snake_case to camelCase
+        })
       }
       if (data.agent_states) {
         setAgentStates(data.agent_states)
@@ -678,9 +684,9 @@ export default function Home() {
       <div className="flex flex-1 overflow-hidden">
         {/* Chat Area with Progress */}
         <div className={`flex flex-col overflow-hidden ${showPreview && currentProject && !isGenerating ? 'w-1/2' : 'flex-1'}`}>
-          {/* Progress Bar - Shows during generation */}
+          {/* Progress Bar - Shows during generation, fixed at top */}
           {isGenerating && (
-            <div className="px-6 pt-4">
+            <div className="shrink-0 px-6 pt-4 pb-2 border-b border-mgx-border/50 bg-mgx-bg/95 backdrop-blur-sm sticky top-0 z-10">
               <ProgressBar
                 progress={progressInfo}
                 agentStates={agentStates}
@@ -701,16 +707,19 @@ export default function Home() {
             conversationMode={conversationMode}
             pendingQuestion={pendingQuestion}
             onSkipQuestion={pendingQuestion ? () => handleSkipQuestion(pendingQuestion.questionId) : undefined}
+            currentAgent={progressInfo?.currentAgent}
           />
         </div>
 
         {/* Agent Status Panel - Shows during generation */}
-        {isGenerating && agentStates.length > 0 && (
-          <div className="w-72 border-l border-mgx-border p-4 overflow-y-auto">
-            <AgentStatusPanel
-              agentStates={agentStates}
-              isGenerating={isGenerating}
-            />
+        {isGenerating && (
+          <div className="w-80 shrink-0 border-l border-mgx-border bg-mgx-bg/95 flex flex-col overflow-hidden">
+            <div className="flex-1 overflow-y-auto p-4">
+              <AgentStatusPanel
+                agentStates={agentStates}
+                isGenerating={isGenerating}
+              />
+            </div>
           </div>
         )}
 

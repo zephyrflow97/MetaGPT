@@ -38,51 +38,59 @@ export function ProgressBar({ progress, agentStates, isGenerating }: ProgressBar
         />
       </div>
 
-      {/* Agent Status */}
+      {/* Agent Status - Horizontal scrollable timeline */}
       {agentStates.length > 0 && (
-        <div className="flex items-center justify-between gap-2">
-          {agentStates.map((agent, idx) => (
-            <div key={agent.name} className="flex-1 flex flex-col items-center">
-              {/* Connector Line */}
-              {idx > 0 && (
-                <div className="absolute left-0 top-1/2 w-full h-0.5 -translate-y-1/2 -z-10">
+        <div className="overflow-x-auto pb-2 scrollbar-thin scrollbar-thumb-mgx-border scrollbar-track-transparent">
+          {/* Agent Timeline */}
+          <div className="flex items-start gap-1 min-w-max px-2">
+            {agentStates.map((agent, idx) => (
+              <div 
+                key={agent.name} 
+                className="flex items-center"
+              >
+                {/* Agent Node */}
+                <div className="flex flex-col items-center">
+                  {/* Agent Icon */}
                   <div className={cn(
-                    'h-full transition-colors duration-300',
-                    agent.state !== 'pending' ? 'bg-mgx-primary' : 'bg-mgx-border'
-                  )} />
+                    'w-8 h-8 rounded-full flex items-center justify-center transition-all duration-300',
+                    agent.state === 'completed' && 'bg-mgx-success text-white',
+                    agent.state === 'active' && 'bg-mgx-primary text-white animate-pulse',
+                    agent.state === 'pending' && 'bg-mgx-surface-light text-mgx-text-muted border border-mgx-border'
+                  )}>
+                    {agent.state === 'completed' ? (
+                      <Check className="w-4 h-4" />
+                    ) : agent.state === 'active' ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Clock className="w-3 h-3" />
+                    )}
+                  </div>
+                  
+                  {/* Agent Name - No truncation */}
+                  <span className={cn(
+                    'text-xs mt-1 text-center transition-colors duration-300 whitespace-nowrap px-1',
+                    agent.state === 'completed' && 'text-mgx-success',
+                    agent.state === 'active' && 'text-mgx-primary font-medium',
+                    agent.state === 'pending' && 'text-mgx-text-muted'
+                  )}>
+                    {agent.name}
+                  </span>
                 </div>
-              )}
-              
-              {/* Agent Icon */}
-              <div className={cn(
-                'w-8 h-8 rounded-full flex items-center justify-center transition-all duration-300',
-                agent.state === 'completed' && 'bg-mgx-success text-white',
-                agent.state === 'active' && 'bg-mgx-primary text-white animate-pulse',
-                agent.state === 'pending' && 'bg-mgx-surface-light text-mgx-text-muted border border-mgx-border'
-              )}>
-                {agent.state === 'completed' ? (
-                  <Check className="w-4 h-4" />
-                ) : agent.state === 'active' ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Clock className="w-3 h-3" />
+                
+                {/* Connector Line (except for last) */}
+                {idx < agentStates.length - 1 && (
+                  <div className={cn(
+                    'w-8 h-0.5 mx-1 mt-[-12px] transition-colors duration-300',
+                    agentStates[idx + 1]?.state !== 'pending' 
+                      ? 'bg-mgx-primary' 
+                      : 'bg-mgx-border'
+                  )} />
                 )}
               </div>
-              
-              {/* Agent Name */}
-              <span className={cn(
-                'text-xs mt-1 text-center transition-colors duration-300 whitespace-nowrap',
-                agent.state === 'completed' && 'text-mgx-success',
-                agent.state === 'active' && 'text-mgx-primary font-medium',
-                agent.state === 'pending' && 'text-mgx-text-muted'
-              )}>
-                {agent.name}
-              </span>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
     </div>
   )
 }
-

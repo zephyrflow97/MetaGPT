@@ -349,6 +349,12 @@ mgx_clone/
 - ✅ 新增 PendingQuestionManager 管理等待中的问题
 - ✅ MetaGPTService 支持 ask_human_callback 回调
 
+#### Bug 修复
+- ✅ 修复进度条 Agent 名称被截断的问题（改用水平滚动布局）
+- ✅ 修复 Agent 状态面板无法显示的问题（添加默认 Agent 列表）
+- ✅ 修复进度追踪不更新的问题（支持 MetaGPT Agent 名称别名：Mike=Team Leader, Alex=Engineer 等）
+- ✅ 修复进度条和 Agent 面板在页面中的定位问题（进度条固定顶部，面板宽度增加）
+
 ---
 
 ### v0.3.0

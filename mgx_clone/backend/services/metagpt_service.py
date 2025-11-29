@@ -69,7 +69,10 @@ def create_web_mgx_env(
             if self._message_callback and message.content:
                 try:
                     # Extract agent name from message
-                    agent_name = message.sent_from or "System"
+                    # sent_from can be in format "Mike(Team Leader)" or just "Mike"
+                    raw_name = message.sent_from or "System"
+                    # Extract just the name before parenthesis if present
+                    agent_name = raw_name.split("(")[0].strip() if "(" in raw_name else raw_name
                     content = message.content
                     
                     # Run callback in event loop - use proper async handling

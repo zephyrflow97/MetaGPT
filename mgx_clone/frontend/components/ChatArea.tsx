@@ -16,6 +16,7 @@ interface ChatAreaProps {
   conversationMode?: ConversationMode
   pendingQuestion?: PendingQuestion | null
   onSkipQuestion?: () => void
+  currentAgent?: string | null  // Currently working agent name
 }
 
 export function ChatArea({
@@ -29,6 +30,7 @@ export function ChatArea({
   conversationMode = 'new_project',
   pendingQuestion,
   onSkipQuestion,
+  currentAgent,
 }: ChatAreaProps) {
   const [input, setInput] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -242,7 +244,9 @@ export function ChatArea({
                       <div className="w-2 h-2 rounded-full bg-mgx-accent typing-dot" />
                     </div>
                     <span className="text-xs text-mgx-text-muted">
-                      AI team is working...
+                      {currentAgent 
+                        ? <><span className="text-mgx-primary font-medium">{currentAgent}</span> is working...</>
+                        : 'AI team is working...'}
                     </span>
                   </div>
                 </div>
