@@ -307,8 +307,70 @@ async def handle_create_project(client_id: str, message: dict):
         "status": "created"
     })
     
-    # Track current agent for progress
-    agent_progress = {"current_idx": 0, "agents_seen": set()}
+    # Track current agent for progress - 使用任务中的 assignee 来追踪
+    agent_progress = {
+        "current_idx": 0, 
+        "agents_seen": set(),
+        "current_assignee": "",  # 当前任务分配的 agent
+        "tasks_seen": set(),  # 已处理的任务 ID
+    }
+    
+    # Task callback 函数 - 处理 TaskReporter 发送的任务状态更新
+    async def task_callback(tasks: list, current_task_id: str, current_assignee: str, instruction: str):
+        """处理来自 MetaGPT Plan 的任务状态更新"""
+        nonlocal agent_progress
+        
+        # 更新当前 assignee
+        agent_progress["current_assignee"] = current_assignee
+        
+        # 如果这是新任务，更新进度
+        if current_task_id and current_task_id not in agent_progress["tasks_seen"]:
+            agent_progress["tasks_seen"].add(current_task_id)
+            agent_progress["agents_seen"].add(current_assignee)
+            
+            # 查找 agent 索引
+            if current_assignee in AGENT_NAME_MAP:
+                agent_progress["current_idx"] = AGENT_NAME_MAP[current_assignee] + 1
+            
+            # 构建 agent 状态
+            total = len(AGENT_WORKFLOW)
+            current = agent_progress["current_idx"]
+            percentage = int((current / total) * 100)
+            
+            agent_states = []
+            for idx, a in enumerate(AGENT_WORKFLOW):
+                is_seen = (
+                    a["name"] in agent_progress["agents_seen"] or 
+                    a["display"] in agent_progress["agents_seen"] or 
+                    any(alias in agent_progress["agents_seen"] for alias in a.get("aliases", []))
+                )
+                if is_seen:
+                    state = "completed" if idx < agent_progress["current_idx"] - 1 else "active"
+                else:
+                    state = "pending"
+                agent_states.append({
+                    "name": a["display"],
+                    "state": state,
+                    "description": a["description"],
+                })
+            
+            # 发送任务更新到前端
+            await manager.send_message(client_id, {
+                "type": "task_update",
+                "project_id": project_id,
+                "current_task_id": current_task_id,
+                "current_assignee": current_assignee,
+                "instruction": instruction[:200] if instruction else "",  # 截断过长的指令
+                "progress": {
+                    "current": current,
+                    "total": total,
+                    "percentage": percentage,
+                    "current_agent": current_assignee,
+                },
+                "agent_states": agent_states,
+            })
+            
+            logger.info(f"Task update: {current_assignee} working on task {current_task_id}")
     
     # Callback function to send messages to client AND save to database
     async def message_callback(agent: str, content: str, msg_type: str = "agent_message"):
@@ -319,6 +381,10 @@ async def handle_create_project(client_id: str, message: dict):
             content=content,
             message_type=msg_type
         )
+        
+        # 获取当前 assignee（从 task_callback 更新）
+        # 如果有任务 assignee，优先使用它；否则使用消息中的 agent
+        current_agent = agent_progress.get("current_assignee") or agent
         
         # Update progress tracking (for agent_message and reply_to_human messages)
         if msg_type in ("agent_message", "reply_to_human") and agent not in agent_progress["agents_seen"]:
@@ -358,7 +424,7 @@ async def handle_create_project(client_id: str, message: dict):
                     "current": current,
                     "total": total,
                     "percentage": percentage,
-                    "current_agent": agent,
+                    "current_agent": current_agent,
                 },
                 "agent_states": agent_states,
             })
@@ -393,10 +459,11 @@ async def handle_create_project(client_id: str, message: dict):
             timeout=300.0  # 5 minutes timeout
         )
         
-        # Initialize MetaGPT service and run
+        # Initialize MetaGPT service and run (with task callback for progress tracking)
         service = MetaGPTService(
             message_callback=message_callback,
-            ask_human_callback=ask_human_cb
+            ask_human_callback=ask_human_cb,
+            task_callback=task_callback,
         )
         workspace_path = await service.generate_project(requirement, name)
         
@@ -482,6 +549,51 @@ async def handle_continue_conversation(client_id: str, message: dict):
         "conversation_round": new_round
     })
     
+    # Track current agent for progress
+    agent_progress = {
+        "current_idx": 0, 
+        "agents_seen": set(),
+        "current_assignee": "",
+        "tasks_seen": set(),
+    }
+    
+    # Task callback 函数 - 处理任务状态更新
+    async def task_callback(tasks: list, current_task_id: str, current_assignee: str, instruction: str):
+        nonlocal agent_progress
+        agent_progress["current_assignee"] = current_assignee
+        
+        if current_task_id and current_task_id not in agent_progress["tasks_seen"]:
+            agent_progress["tasks_seen"].add(current_task_id)
+            agent_progress["agents_seen"].add(current_assignee)
+            
+            if current_assignee in AGENT_NAME_MAP:
+                agent_progress["current_idx"] = AGENT_NAME_MAP[current_assignee] + 1
+            
+            total = len(AGENT_WORKFLOW)
+            current = agent_progress["current_idx"]
+            percentage = int((current / total) * 100)
+            
+            agent_states = []
+            for idx, a in enumerate(AGENT_WORKFLOW):
+                is_seen = (
+                    a["name"] in agent_progress["agents_seen"] or 
+                    a["display"] in agent_progress["agents_seen"] or 
+                    any(alias in agent_progress["agents_seen"] for alias in a.get("aliases", []))
+                )
+                state = "completed" if is_seen and idx < agent_progress["current_idx"] - 1 else ("active" if is_seen else "pending")
+                agent_states.append({"name": a["display"], "state": state, "description": a["description"]})
+            
+            await manager.send_message(client_id, {
+                "type": "task_update",
+                "project_id": project_id,
+                "current_task_id": current_task_id,
+                "current_assignee": current_assignee,
+                "instruction": instruction[:200] if instruction else "",
+                "progress": {"current": current, "total": total, "percentage": percentage, "current_agent": current_assignee},
+                "agent_states": agent_states,
+                "conversation_round": new_round,
+            })
+    
     # Callback function to send messages to client AND save to database
     async def message_callback(agent: str, content: str, msg_type: str = "agent_message"):
         await save_message(
@@ -555,10 +667,11 @@ Location: {workspace_path}
             timeout=300.0
         )
         
-        # Initialize MetaGPT service and run with context
+        # Initialize MetaGPT service and run with context (with task callback)
         service = MetaGPTService(
             message_callback=message_callback,
-            ask_human_callback=ask_human_cb
+            ask_human_callback=ask_human_cb,
+            task_callback=task_callback,
         )
         workspace_path = await service.continue_project(
             project_id=project_id,
@@ -629,6 +742,21 @@ async def handle_regenerate_project(client_id: str, message: dict):
         "conversation_round": new_round
     })
     
+    # Track current agent for progress
+    agent_progress = {"current_idx": 0, "agents_seen": set(), "current_assignee": "", "tasks_seen": set()}
+    
+    async def task_callback(tasks: list, current_task_id: str, current_assignee: str, instruction: str):
+        nonlocal agent_progress
+        agent_progress["current_assignee"] = current_assignee
+        if current_task_id and current_task_id not in agent_progress["tasks_seen"]:
+            agent_progress["tasks_seen"].add(current_task_id)
+            agent_progress["agents_seen"].add(current_assignee)
+            if current_assignee in AGENT_NAME_MAP:
+                agent_progress["current_idx"] = AGENT_NAME_MAP[current_assignee] + 1
+            total, current = len(AGENT_WORKFLOW), agent_progress["current_idx"]
+            agent_states = [{"name": a["display"], "state": "completed" if (a["name"] in agent_progress["agents_seen"] or a["display"] in agent_progress["agents_seen"]) and idx < current - 1 else ("active" if (a["name"] in agent_progress["agents_seen"] or a["display"] in agent_progress["agents_seen"]) else "pending"), "description": a["description"]} for idx, a in enumerate(AGENT_WORKFLOW)]
+            await manager.send_message(client_id, {"type": "task_update", "project_id": project_id, "current_assignee": current_assignee, "progress": {"current": current, "total": total, "percentage": int((current / total) * 100), "current_agent": current_assignee}, "agent_states": agent_states, "conversation_round": new_round})
+    
     # Callback function
     async def message_callback(agent: str, content: str, msg_type: str = "agent_message"):
         await save_message(
@@ -656,10 +784,11 @@ async def handle_regenerate_project(client_id: str, message: dict):
             timeout=300.0
         )
         
-        # Re-run generation with original requirement
+        # Re-run generation with original requirement (with task callback)
         service = MetaGPTService(
             message_callback=message_callback,
-            ask_human_callback=ask_human_cb
+            ask_human_callback=ask_human_cb,
+            task_callback=task_callback,
         )
         workspace_path = await service.generate_project(
             requirement=project.get("requirement", ""),
@@ -782,8 +911,21 @@ async def handle_retry_project(client_id: str, message: dict):
         "conversation_round": new_round
     })
     
-    # Track progress
-    agent_progress = {"current_idx": 0, "agents_seen": set()}
+    # Track progress - 增加任务追踪
+    agent_progress = {"current_idx": 0, "agents_seen": set(), "current_assignee": "", "tasks_seen": set()}
+    
+    # Task callback 函数
+    async def task_callback(tasks: list, current_task_id: str, current_assignee: str, instruction: str):
+        nonlocal agent_progress
+        agent_progress["current_assignee"] = current_assignee
+        if current_task_id and current_task_id not in agent_progress["tasks_seen"]:
+            agent_progress["tasks_seen"].add(current_task_id)
+            agent_progress["agents_seen"].add(current_assignee)
+            if current_assignee in AGENT_NAME_MAP:
+                agent_progress["current_idx"] = AGENT_NAME_MAP[current_assignee] + 1
+            total, current = len(AGENT_WORKFLOW), agent_progress["current_idx"]
+            agent_states = [{"name": a["display"], "state": "completed" if (a["name"] in agent_progress["agents_seen"] or a["display"] in agent_progress["agents_seen"]) and idx < current - 1 else ("active" if (a["name"] in agent_progress["agents_seen"] or a["display"] in agent_progress["agents_seen"]) else "pending"), "description": a["description"]} for idx, a in enumerate(AGENT_WORKFLOW)]
+            await manager.send_message(client_id, {"type": "task_update", "project_id": project_id, "current_assignee": current_assignee, "progress": {"current": current, "total": total, "percentage": int((current / total) * 100), "current_agent": current_assignee}, "agent_states": agent_states, "conversation_round": new_round})
     
     # Callback function with progress tracking
     async def message_callback(agent: str, content: str, msg_type: str = "agent_message"):
@@ -867,10 +1009,11 @@ async def handle_retry_project(client_id: str, message: dict):
             timeout=300.0
         )
         
-        # Re-run generation with original requirement
+        # Re-run generation with original requirement (with task callback)
         service = MetaGPTService(
             message_callback=message_callback,
-            ask_human_callback=ask_human_cb
+            ask_human_callback=ask_human_cb,
+            task_callback=task_callback,
         )
         workspace_path = await service.generate_project(
             requirement=project.get("requirement", ""),

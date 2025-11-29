@@ -4,6 +4,9 @@ import { useState, useEffect } from 'react'
 import { X, Check, Plus, Sparkles, ChevronRight } from 'lucide-react'
 import { ProjectTemplate, TemplateCategory } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { getApiBase } from '@/lib/config'
+
+const API_BASE = getApiBase()
 
 interface TemplateSelectorProps {
   isOpen: boolean
@@ -31,7 +34,7 @@ export function TemplateSelector({ isOpen, onClose, onSelectTemplate }: Template
 
   const fetchTemplates = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/templates')
+      const response = await fetch(`${API_BASE}/api/templates`)
       const data = await response.json()
       setTemplates(data.templates || [])
     } catch (error) {
@@ -41,7 +44,7 @@ export function TemplateSelector({ isOpen, onClose, onSelectTemplate }: Template
 
   const fetchCategories = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/templates/categories')
+      const response = await fetch(`${API_BASE}/api/templates/categories`)
       const data = await response.json()
       setCategories(data.categories || [])
     } catch (error) {

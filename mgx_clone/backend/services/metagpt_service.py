@@ -8,7 +8,7 @@ Note: MetaGPT imports are done lazily to avoid config validation on startup.
 import asyncio
 import logging
 from pathlib import Path
-from typing import Callable, Optional, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING, Any
 
 # Create logger for this module
 logger = logging.getLogger(__name__)
@@ -20,6 +20,114 @@ if TYPE_CHECKING:
     from metagpt.environment.mgx.mgx_env import MGXEnv
     from metagpt.schema import Message
     from metagpt.team import Team
+
+
+def setup_task_reporter_callback(task_callback: Optional[Callable] = None):
+    """
+    设置 TaskReporter 的自定义回调函数，用于监控任务状态变化。
+    
+    当 Plan._update_current_task() 被调用时，TaskReporter 会报告任务状态，
+    包括当前任务及其 assignee。
+    
+    Args:
+        task_callback: 异步回调函数，签名为：
+            async (tasks: list, current_task_id: str, current_assignee: str, instruction: str) -> None
+    """
+    from metagpt.utils.report import TaskReporter
+    
+    if task_callback is None:
+        return
+    
+    def custom_report(self, value: Any, name: str = "object", extra: Optional[dict] = None):
+        """自定义的同步报告函数，在原始报告后触发回调"""
+        try:
+            if isinstance(value, dict) and "tasks" in value:
+                tasks = value.get("tasks", [])
+                current_task_id = value.get("current_task_id", "")
+                
+                # 找到当前任务的 assignee
+                current_assignee = ""
+                current_instruction = ""
+                for task in tasks:
+                    if task.get("task_id") == current_task_id:
+                        current_assignee = task.get("assignee", "")
+                        current_instruction = task.get("instruction", "")
+                        break
+                
+                # 调用回调 - 需要在事件循环中运行
+                if current_assignee:
+                    logger.info(f"TaskReporter: Task {current_task_id} assigned to {current_assignee}")
+                    try:
+                        loop = asyncio.get_running_loop()
+                        future = asyncio.ensure_future(
+                            task_callback(tasks, current_task_id, current_assignee, current_instruction)
+                        )
+                        # 添加错误处理
+                        future.add_done_callback(
+                            lambda f: logger.warning(f"Task callback error: {f.exception()}") if f.exception() else None
+                        )
+                    except RuntimeError as e:
+                        # 没有运行的事件循环，尝试创建一个
+                        logger.warning(f"No running event loop for task callback: {e}")
+        except Exception as e:
+            logger.warning(f"TaskReporter callback error: {e}")
+        
+        # 不调用原始的 _report（它会尝试发送 HTTP 请求到不存在的服务器）
+        # 只返回 None
+        return None
+    
+    # 使用 set_report_fn 设置自定义报告函数
+    TaskReporter.set_report_fn(custom_report)
+
+
+def setup_thought_reporter_callback(thought_callback: Optional[Callable] = None):
+    """
+    设置 ThoughtReporter 的自定义回调函数，用于捕获 Agent 的思考过程。
+    
+    Mike (TeamLeader) 在分析需求时会产生思考内容，例如：
+    - 评估任务复杂度
+    - 决定是否需要完整的开发流程
+    - 解释为什么分配给某个 Agent
+    
+    Args:
+        thought_callback: 异步回调函数，签名为：
+            async (thought_type: str, content: Any, role: str) -> None
+    """
+    from metagpt.utils.report import ThoughtReporter
+    
+    if thought_callback is None:
+        return
+    
+    def custom_thought_report(self, value: Any, name: str = "object", extra: Optional[dict] = None):
+        """自定义的思考报告函数"""
+        try:
+            # 获取当前角色名称
+            role_name = extra.get("role") if extra else None
+            if not role_name:
+                import os
+                role_name = os.environ.get("METAGPT_ROLE", "Mike")
+            
+            # value 可能是 {"type": "react"} 或者 {"type": "quick"} 等
+            thought_type = value.get("type", "unknown") if isinstance(value, dict) else "content"
+            
+            logger.info(f"ThoughtReporter: {role_name} - {thought_type}")
+            
+            try:
+                loop = asyncio.get_running_loop()
+                future = asyncio.ensure_future(
+                    thought_callback(thought_type, value, role_name)
+                )
+                future.add_done_callback(
+                    lambda f: logger.warning(f"Thought callback error: {f.exception()}") if f.exception() else None
+                )
+            except RuntimeError:
+                pass
+        except Exception as e:
+            logger.warning(f"ThoughtReporter callback error: {e}")
+        
+        return None
+    
+    ThoughtReporter.set_report_fn(custom_thought_report)
 
 
 def create_web_mgx_env(
@@ -166,6 +274,7 @@ class MetaGPTService:
         self,
         message_callback: Optional[Callable] = None,
         ask_human_callback: Optional[Callable] = None,
+        task_callback: Optional[Callable] = None,
         investment: float = 3.0,
         n_round: int = 5,
     ):
@@ -177,11 +286,14 @@ class MetaGPTService:
                 Signature: async (agent: str, content: str, msg_type: str) -> None
             ask_human_callback: Async callback for asking questions to user
                 Signature: async (agent: str, question: str, question_type: str, options: list) -> str
+            task_callback: Async callback for task status updates
+                Signature: async (tasks: list, current_task_id: str, current_assignee: str, instruction: str) -> None
             investment: Investment amount for the project
             n_round: Number of rounds for project generation
         """
         self.message_callback = message_callback
         self.ask_human_callback = ask_human_callback
+        self.task_callback = task_callback
         self.investment = investment
         self.n_round = n_round
     
@@ -208,6 +320,10 @@ class MetaGPTService:
         from metagpt.roles.di.engineer2 import Engineer2
         from metagpt.roles.di.team_leader import TeamLeader
         from metagpt.team import Team
+        
+        # 设置 TaskReporter 回调以捕获任务状态变化
+        if self.task_callback:
+            setup_task_reporter_callback(self.task_callback)
         
         # Notify start
         if self.message_callback:
@@ -350,6 +466,10 @@ class MetaGPTService:
         from metagpt.roles.di.engineer2 import Engineer2
         from metagpt.roles.di.team_leader import TeamLeader
         from metagpt.team import Team
+        
+        # 设置 TaskReporter 回调以捕获任务状态变化
+        if self.task_callback:
+            setup_task_reporter_callback(self.task_callback)
         
         if self.message_callback:
             await self.message_callback(

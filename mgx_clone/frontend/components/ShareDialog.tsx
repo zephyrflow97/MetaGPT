@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { X, Link2, Copy, Check, Globe, Lock, Loader2, Trash2 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
+import { getApiBase } from '@/lib/config'
 import { Project, ShareInfo } from '@/lib/types'
 
 interface ShareDialogProps {
@@ -11,7 +12,7 @@ interface ShareDialogProps {
   onClose: () => void
 }
 
-const API_BASE = 'http://localhost:8000/api'
+const API_BASE = getApiBase() + '/api'
 
 export function ShareDialog({ isOpen, project, onClose }: ShareDialogProps) {
   const { token, isAuthenticated } = useAuth()

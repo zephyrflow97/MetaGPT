@@ -13,7 +13,11 @@ import { ClarificationDialog } from '@/components/ClarificationDialog'
 import { Message, Project, FileInfo, ConversationMode, ProgressInfo, AgentState, ProjectTemplate, PendingQuestion } from '@/lib/types'
 import { generateClientId } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-context'
+import { getApiBase, getWsUrl } from '@/lib/config'
 import { Sparkles, ArrowRight, LogIn, UserPlus } from 'lucide-react'
+
+// 获取 API 基础地址
+const API_BASE = getApiBase()
 
 export default function Home() {
   const router = useRouter()
@@ -63,8 +67,8 @@ export default function Home() {
     const connect = () => {
       if (!isMounted) return
       
-      // Build WebSocket URL with optional token
-      let wsUrl = `ws://localhost:8000/ws/chat/${clientIdRef.current}`
+      // Build WebSocket URL with optional token (支持公网访问)
+      let wsUrl = getWsUrl(`/ws/chat/${clientIdRef.current}`)
       if (token) {
         wsUrl += `?token=${encodeURIComponent(token)}`
       }
@@ -136,6 +140,24 @@ export default function Home() {
         setAgentStates(data.agent_states)
       }
       return  // Don't create a message for agent status updates
+    }
+    
+    // Handle task updates from MetaGPT Plan (key for tracking agent work)
+    if (data.type === 'task_update') {
+      console.log('[task_update] Received:', data)
+      if (data.progress) {
+        setProgressInfo({
+          current: data.progress.current,
+          total: data.progress.total,
+          percentage: data.progress.percentage,
+          currentAgent: data.current_assignee || data.progress.current_agent,
+          currentTask: data.instruction,  // 当前任务描述
+        })
+      }
+      if (data.agent_states) {
+        setAgentStates(data.agent_states)
+      }
+      return  // Don't create a message for task updates
     }
     
     // Handle clarification request from Agent
@@ -266,7 +288,7 @@ export default function Home() {
       if (token) {
         headers['Authorization'] = `Bearer ${token}`
       }
-      const response = await fetch('http://localhost:8000/api/projects', { headers })
+      const response = await fetch(`${API_BASE}/api/projects`, { headers })
       const data = await response.json()
       setProjects(data.projects || [])
     } catch (error) {
@@ -279,8 +301,8 @@ export default function Home() {
     try {
       // Load project and messages first (fast), files can be slightly delayed
       const [projectRes, messagesRes] = await Promise.all([
-        fetch(`http://localhost:8000/api/projects/${projectId}`),
-        fetch(`http://localhost:8000/api/projects/${projectId}/messages`),
+        fetch(`${API_BASE}/api/projects/${projectId}`),
+        fetch(`${API_BASE}/api/projects/${projectId}/messages`),
       ])
 
       const project = await projectRes.json()
@@ -333,7 +355,7 @@ export default function Home() {
       setConversationMode(project.status === 'completed' ? 'continue_conversation' : 'new_project')
       
       // Load files in background (non-blocking)
-      fetch(`http://localhost:8000/api/projects/${projectId}/files`)
+      fetch(`${API_BASE}/api/projects/${projectId}/files`)
         .then(res => res.json())
         .then(filesData => {
           setProjectFiles(filesData.files || [])
@@ -353,7 +375,7 @@ export default function Home() {
 
     try {
       const response = await fetch(
-        `http://localhost:8000/api/projects/${currentProject.id}/files/${file.path}`
+        `${API_BASE}/api/projects/${currentProject.id}/files/${file.path}`
       )
       const data = await response.json()
       setFileContent(data.content)
@@ -584,7 +606,7 @@ export default function Home() {
   const handleDownloadProject = async () => {
     if (!currentProject) return
     window.open(
-      `http://localhost:8000/api/projects/${currentProject.id}/download`,
+      `${API_BASE}/api/projects/${currentProject.id}/download`,
       '_blank'
     )
   }
@@ -691,6 +713,7 @@ export default function Home() {
                 progress={progressInfo}
                 agentStates={agentStates}
                 isGenerating={isGenerating}
+                currentTask={progressInfo?.currentTask}
               />
             </div>
           )}
@@ -718,6 +741,7 @@ export default function Home() {
               <AgentStatusPanel
                 agentStates={agentStates}
                 isGenerating={isGenerating}
+                currentTask={progressInfo?.currentTask}
               />
             </div>
           </div>

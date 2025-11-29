@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Tag, Plus, X, Check, Loader2 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
+import { getApiBase } from '@/lib/config'
 import { Tag as TagType, Project } from '@/lib/types'
 
 interface TagSelectorProps {
@@ -10,7 +11,7 @@ interface TagSelectorProps {
   onTagsChange?: () => void
 }
 
-const API_BASE = 'http://localhost:8000/api'
+const API_BASE = getApiBase() + '/api'
 
 export function TagSelector({ project, onTagsChange }: TagSelectorProps) {
   const { token, isAuthenticated } = useAuth()

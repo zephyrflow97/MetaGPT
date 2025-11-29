@@ -5,9 +5,10 @@ import { useParams } from 'next/navigation'
 import { Sparkles, Eye, Lock, Loader2, ExternalLink, RefreshCw } from 'lucide-react'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
+import { getApiBase, getPreviewUrl } from '@/lib/config'
 import { Project } from '@/lib/types'
 
-const API_BASE = 'http://localhost:8000/api'
+const API_BASE = getApiBase() + '/api'
 
 export default function SharedProjectPage() {
   const params = useParams()
@@ -65,7 +66,7 @@ export default function SharedProjectPage() {
 
   const openInNewTab = () => {
     if (project) {
-      window.open(`http://localhost:8000/preview/${project.id}/`, '_blank')
+      window.open(getPreviewUrl(project.id), '_blank')
     }
   }
 
@@ -170,7 +171,7 @@ export default function SharedProjectPage() {
         {project?.workspace_path ? (
           <iframe
             key={iframeKey}
-            src={`http://localhost:8000/preview/${project.id}/`}
+            src={getPreviewUrl(project.id)}
             className="w-full h-full border-0"
             title={`Preview of ${project.name}`}
             style={{ minHeight: '100%' }}

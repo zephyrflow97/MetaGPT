@@ -23,9 +23,12 @@ import {
 } from 'lucide-react'
 import { Project, FileInfo } from '@/lib/types'
 import { cn, getFileLanguage, truncateText } from '@/lib/utils'
+import { getApiBase, getPreviewUrl } from '@/lib/config'
 import { ShareDialog } from './ShareDialog'
 import { TagSelector } from './TagSelector'
 import { TagManager } from './TagManager'
+
+const API_BASE = getApiBase()
 
 interface CodePreviewProps {
   project: Project
@@ -114,7 +117,7 @@ export function CodePreview({
     setIsSaving(true)
     try {
       const response = await fetch(
-        `http://localhost:8000/api/projects/${project.id}/files/${selectedFile.path}`,
+        `${API_BASE}/api/projects/${project.id}/files/${selectedFile.path}`,
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
@@ -377,7 +380,7 @@ export function CodePreview({
           <div className="flex-1 bg-white">
             {project.workspace_path ? (
               <iframe
-                src={`http://localhost:8000/preview/${project.id}/`}
+                src={getPreviewUrl(project.id)}
                 className="w-full h-full border-0"
                 title="Project Preview"
               />

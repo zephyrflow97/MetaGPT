@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { Tag, Plus, X, Edit2, Trash2, Check, Loader2 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
+import { getApiBase } from '@/lib/config'
 import { Tag as TagType } from '@/lib/types'
 
 interface TagManagerProps {
@@ -11,7 +12,7 @@ interface TagManagerProps {
   onTagsChange?: () => void
 }
 
-const API_BASE = 'http://localhost:8000/api'
+const API_BASE = getApiBase() + '/api'
 
 const PRESET_COLORS = [
   '#3B82F6', // blue
