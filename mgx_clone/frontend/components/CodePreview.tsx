@@ -1,7 +1,8 @@
 'use client'
 
-import { useState } from 'react'
-import Editor from '@monaco-editor/react'
+import { useState, useCallback, useRef } from 'react'
+import Editor, { OnMount } from '@monaco-editor/react'
+import type { editor } from 'monaco-editor'
 import {
   X,
   Download,
@@ -12,6 +13,10 @@ import {
   Eye,
   Code2,
   ExternalLink,
+  Save,
+  Edit3,
+  Lock,
+  Loader2,
 } from 'lucide-react'
 import { Project, FileInfo } from '@/lib/types'
 import { cn, getFileLanguage, truncateText } from '@/lib/utils'
@@ -24,6 +29,7 @@ interface CodePreviewProps {
   onSelectFile: (file: FileInfo) => void
   onDownload: () => void
   onClose: () => void
+  onFileContentChange?: (content: string) => void
 }
 
 export function CodePreview({
@@ -34,9 +40,15 @@ export function CodePreview({
   onSelectFile,
   onDownload,
   onClose,
+  onFileContentChange,
 }: CodePreviewProps) {
   const [viewMode, setViewMode] = useState<'code' | 'preview'>('code')
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['/']))
+  const [isEditing, setIsEditing] = useState(false)
+  const [editedContent, setEditedContent] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
 
   // Organize files into folder structure
   const fileTree = buildFileTree(files)
@@ -54,6 +66,72 @@ export function CodePreview({
   // Check if preview is available (HTML file exists)
   const hasPreviewableContent =
     files.some((f) => f.extension === '.html') && project.workspace_path
+
+  // Handle editor mount
+  const handleEditorMount: OnMount = useCallback((editor) => {
+    editorRef.current = editor
+  }, [])
+
+  // Handle content change in editor
+  const handleEditorChange = useCallback((value: string | undefined) => {
+    if (value !== undefined) {
+      setEditedContent(value)
+      setHasUnsavedChanges(value !== fileContent)
+    }
+  }, [fileContent])
+
+  // Toggle edit mode
+  const handleToggleEdit = useCallback(() => {
+    if (isEditing && hasUnsavedChanges) {
+      // Ask confirmation before discarding changes
+      if (!confirm('You have unsaved changes. Discard them?')) {
+        return
+      }
+    }
+    setIsEditing(!isEditing)
+    setEditedContent(fileContent)
+    setHasUnsavedChanges(false)
+  }, [isEditing, hasUnsavedChanges, fileContent])
+
+  // Save file
+  const handleSave = useCallback(async () => {
+    if (!selectedFile || !hasUnsavedChanges) return
+    
+    setIsSaving(true)
+    try {
+      const response = await fetch(
+        `http://localhost:8000/api/projects/${project.id}/files/${selectedFile.path}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: editedContent }),
+        }
+      )
+      
+      if (response.ok) {
+        setHasUnsavedChanges(false)
+        // Notify parent to refresh content
+        onFileContentChange?.(editedContent)
+      } else {
+        const error = await response.json()
+        alert(`Failed to save: ${error.detail || 'Unknown error'}`)
+      }
+    } catch (error) {
+      alert(`Failed to save: ${error}`)
+    } finally {
+      setIsSaving(false)
+    }
+  }, [selectedFile, hasUnsavedChanges, editedContent, project.id, onFileContentChange])
+
+  // Keyboard shortcut for save
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      e.preventDefault()
+      if (isEditing && hasUnsavedChanges) {
+        handleSave()
+      }
+    }
+  }, [isEditing, hasUnsavedChanges, handleSave])
 
   return (
     <div className="w-1/2 h-full bg-mgx-surface border-l border-mgx-border flex flex-col">
@@ -98,6 +176,51 @@ export function CodePreview({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Edit/Save buttons for code mode */}
+          {viewMode === 'code' && selectedFile && (
+            <>
+              {isEditing ? (
+                <>
+                  <button
+                    onClick={handleSave}
+                    disabled={!hasUnsavedChanges || isSaving}
+                    className={cn(
+                      'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                      hasUnsavedChanges && !isSaving
+                        ? 'bg-mgx-success/10 text-mgx-success hover:bg-mgx-success/20'
+                        : 'bg-mgx-surface-light text-mgx-text-muted cursor-not-allowed'
+                    )}
+                  >
+                    {isSaving ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Save className="w-3.5 h-3.5" />
+                    )}
+                    {isSaving ? 'Saving...' : 'Save'}
+                  </button>
+                  <button
+                    onClick={handleToggleEdit}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                             bg-mgx-surface-light text-mgx-text-muted hover:text-mgx-text
+                             text-xs font-medium transition-colors"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    Read Only
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleToggleEdit}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                           bg-mgx-accent/10 text-mgx-accent hover:bg-mgx-accent/20
+                           text-xs font-medium transition-colors"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  Edit
+                </button>
+              )}
+            </>
+          )}
           <button
             onClick={onDownload}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
@@ -141,15 +264,18 @@ export function CodePreview({
             </div>
 
             {/* Code Editor */}
-            <div className="flex-1 flex flex-col">
+            <div className="flex-1 flex flex-col" onKeyDown={handleKeyDown}>
               {selectedFile ? (
                 <>
                   {/* File Tab */}
                   <div className="flex items-center gap-2 px-4 py-2 border-b border-mgx-border bg-mgx-bg">
                     <FileIcon extension={selectedFile.extension} />
                     <span className="text-xs text-mgx-text">{selectedFile.name}</span>
+                    {hasUnsavedChanges && (
+                      <span className="w-2 h-2 rounded-full bg-mgx-warning" title="Unsaved changes" />
+                    )}
                     <span className="text-xs text-mgx-text-muted ml-auto">
-                      {getFileLanguage(selectedFile.extension)}
+                      {isEditing ? '✏️ Editing' : '🔒 Read Only'} • {getFileLanguage(selectedFile.extension)}
                     </span>
                   </div>
                   {/* Monaco Editor */}
@@ -157,10 +283,12 @@ export function CodePreview({
                     <Editor
                       height="100%"
                       language={getFileLanguage(selectedFile.extension)}
-                      value={fileContent}
+                      value={isEditing ? editedContent : fileContent}
                       theme="vs-dark"
+                      onMount={handleEditorMount}
+                      onChange={isEditing ? handleEditorChange : undefined}
                       options={{
-                        readOnly: true,
+                        readOnly: !isEditing,
                         minimap: { enabled: false },
                         fontSize: 13,
                         fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
@@ -168,6 +296,9 @@ export function CodePreview({
                         scrollBeyondLastLine: false,
                         wordWrap: 'on',
                         padding: { top: 16 },
+                        renderValidationDecorations: isEditing ? 'on' : 'off',
+                        cursorStyle: isEditing ? 'line' : 'line-thin',
+                        cursorBlinking: isEditing ? 'blink' : 'solid',
                       }}
                     />
                   </div>

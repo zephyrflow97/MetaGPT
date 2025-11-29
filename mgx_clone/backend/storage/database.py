@@ -39,6 +39,7 @@ async def init_db():
                 agent TEXT NOT NULL,
                 content TEXT NOT NULL,
                 message_type TEXT DEFAULT 'agent_message',
+                conversation_round INTEGER DEFAULT 1,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (project_id) REFERENCES projects(id)
             )
@@ -53,6 +54,12 @@ async def init_db():
             CREATE INDEX IF NOT EXISTS idx_messages_project_id 
             ON messages(project_id)
         """)
+        
+        # Add conversation_round column if not exists (migration)
+        try:
+            await db.execute("ALTER TABLE messages ADD COLUMN conversation_round INTEGER DEFAULT 1")
+        except Exception:
+            pass  # Column already exists
         
         await db.commit()
 
@@ -140,7 +147,8 @@ async def save_message(
     project_id: str,
     agent: str,
     content: str,
-    message_type: str = "agent_message"
+    message_type: str = "agent_message",
+    conversation_round: int = 1
 ) -> dict:
     """Save a message to database"""
     message_id = str(uuid.uuid4())
@@ -149,10 +157,10 @@ async def save_message(
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """
-            INSERT INTO messages (id, project_id, agent, content, message_type, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (id, project_id, agent, content, message_type, conversation_round, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (message_id, project_id, agent, content, message_type, now)
+            (message_id, project_id, agent, content, message_type, conversation_round, now)
         )
         await db.commit()
     
@@ -162,8 +170,35 @@ async def save_message(
         "agent": agent,
         "content": content,
         "message_type": message_type,
+        "conversation_round": conversation_round,
         "created_at": now
     }
+
+
+async def get_latest_conversation_round(project_id: str) -> int:
+    """Get the latest conversation round for a project"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT MAX(conversation_round) FROM messages WHERE project_id = ?",
+            (project_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] else 0
+
+
+async def save_user_message(
+    project_id: str,
+    content: str,
+    conversation_round: int = 1
+) -> dict:
+    """Save a user message to database"""
+    return await save_message(
+        project_id=project_id,
+        agent="User",
+        content=content,
+        message_type="user",
+        conversation_round=conversation_round
+    )
 
 
 async def get_project_messages(project_id: str) -> list[dict]:
@@ -174,9 +209,27 @@ async def get_project_messages(project_id: str) -> list[dict]:
             """
             SELECT * FROM messages 
             WHERE project_id = ? 
-            ORDER BY created_at ASC
+            ORDER BY conversation_round ASC, created_at ASC
             """,
             (project_id,)
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
+
+
+async def get_conversation_history(project_id: str) -> list[dict]:
+    """Get conversation history grouped by rounds for a project"""
+    messages = await get_project_messages(project_id)
+    
+    # Group by conversation round
+    rounds: dict[int, list[dict]] = {}
+    for msg in messages:
+        round_num = msg.get("conversation_round", 1)
+        if round_num not in rounds:
+            rounds[round_num] = []
+        rounds[round_num].append(msg)
+    
+    return [
+        {"round": round_num, "messages": round_messages}
+        for round_num, round_messages in sorted(rounds.items())
+    ]

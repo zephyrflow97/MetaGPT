@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { Send, Sparkles, Bot, User, AlertCircle, CheckCircle2 } from 'lucide-react'
-import { Message } from '@/lib/types'
+import { Send, Sparkles, Bot, User, AlertCircle, CheckCircle2, RefreshCw, MessageSquarePlus } from 'lucide-react'
+import { Message, ConversationMode, Project } from '@/lib/types'
 import { cn, formatTimestamp, getAgentColor } from '@/lib/utils'
 
 interface ChatAreaProps {
@@ -10,6 +10,9 @@ interface ChatAreaProps {
   isGenerating: boolean
   onSendMessage: (content: string) => void
   showPreview: boolean
+  currentProject?: Project | null
+  onRegenerate?: () => void
+  conversationMode?: ConversationMode
 }
 
 export function ChatArea({
@@ -17,10 +20,16 @@ export function ChatArea({
   isGenerating,
   onSendMessage,
   showPreview,
+  currentProject,
+  onRegenerate,
+  conversationMode = 'new_project',
 }: ChatAreaProps) {
   const [input, setInput] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  
+  // Check if we're in continue conversation mode
+  const isContinueMode = currentProject && currentProject.status === 'completed'
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -104,54 +113,75 @@ export function ChatArea({
           </div>
         ) : (
           <div className="space-y-4 max-w-3xl mx-auto">
-            {messages.map((message, index) => (
-              <div
-                key={message.id}
-                className={cn(
-                  'message-animate',
-                  message.type === 'user' ? 'flex justify-end' : 'flex justify-start'
-                )}
-                style={{ animationDelay: `${index * 50}ms` }}
-              >
-                <div
-                  className={cn(
-                    'max-w-[85%] rounded-2xl px-4 py-3',
-                    message.type === 'user'
-                      ? 'bg-mgx-primary text-white rounded-br-sm'
-                      : message.type === 'error'
-                      ? 'bg-mgx-error/10 border border-mgx-error/30 text-mgx-error rounded-bl-sm'
-                      : message.type === 'complete'
-                      ? 'bg-mgx-success/10 border border-mgx-success/30 text-mgx-success rounded-bl-sm'
-                      : 'bg-mgx-surface-light border border-mgx-border rounded-bl-sm'
-                  )}
-                >
-                  {message.type !== 'user' && (
-                    <div className="flex items-center gap-2 mb-2">
-                      <div
-                        className={cn(
-                          'w-6 h-6 rounded-full flex items-center justify-center text-white text-xs',
-                          getAgentColor(message.agent)
-                        )}
-                      >
-                        {getMessageIcon(message.type, message.agent)}
-                      </div>
-                      <span className="text-xs font-medium text-mgx-text-muted">
-                        {message.agent}
+            {messages.map((message, index) => {
+              // Check if we need to show a round separator
+              const prevMessage = index > 0 ? messages[index - 1] : null
+              const showRoundSeparator = prevMessage && 
+                message.conversationRound && 
+                prevMessage.conversationRound && 
+                message.conversationRound > prevMessage.conversationRound
+
+              return (
+                <div key={message.id}>
+                  {/* Round separator */}
+                  {showRoundSeparator && (
+                    <div className="flex items-center gap-3 my-6">
+                      <div className="flex-1 h-px bg-mgx-border" />
+                      <span className="text-xs font-medium text-mgx-text-muted px-3 py-1 bg-mgx-surface rounded-full">
+                        Round {message.conversationRound}
                       </span>
-                      <span className="text-xs text-mgx-text-muted opacity-60">
-                        {formatTimestamp(message.timestamp)}
-                      </span>
+                      <div className="flex-1 h-px bg-mgx-border" />
                     </div>
                   )}
-                  <div className={cn(
-                    'text-sm whitespace-pre-wrap break-words',
-                    message.type === 'user' ? 'text-white' : 'text-mgx-text'
-                  )}>
-                    {message.content}
+                  
+                  <div
+                    className={cn(
+                      'message-animate',
+                      message.type === 'user' ? 'flex justify-end' : 'flex justify-start'
+                    )}
+                    style={{ animationDelay: `${index * 50}ms` }}
+                  >
+                    <div
+                      className={cn(
+                        'max-w-[85%] rounded-2xl px-4 py-3',
+                        message.type === 'user'
+                          ? 'bg-mgx-primary text-white rounded-br-sm'
+                          : message.type === 'error'
+                          ? 'bg-mgx-error/10 border border-mgx-error/30 text-mgx-error rounded-bl-sm'
+                          : message.type === 'complete'
+                          ? 'bg-mgx-success/10 border border-mgx-success/30 text-mgx-success rounded-bl-sm'
+                          : 'bg-mgx-surface-light border border-mgx-border rounded-bl-sm'
+                      )}
+                    >
+                      {message.type !== 'user' && (
+                        <div className="flex items-center gap-2 mb-2">
+                          <div
+                            className={cn(
+                              'w-6 h-6 rounded-full flex items-center justify-center text-white text-xs',
+                              getAgentColor(message.agent)
+                            )}
+                          >
+                            {getMessageIcon(message.type, message.agent)}
+                          </div>
+                          <span className="text-xs font-medium text-mgx-text-muted">
+                            {message.agent}
+                          </span>
+                          <span className="text-xs text-mgx-text-muted opacity-60">
+                            {formatTimestamp(message.timestamp)}
+                          </span>
+                        </div>
+                      )}
+                      <div className={cn(
+                        'text-sm whitespace-pre-wrap break-words',
+                        message.type === 'user' ? 'text-white' : 'text-mgx-text'
+                      )}>
+                        {message.content}
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
 
             {/* Typing Indicator */}
             {isGenerating && (
@@ -178,6 +208,32 @@ export function ChatArea({
 
       {/* Input Area */}
       <div className="border-t border-mgx-border p-4">
+        {/* Continue mode indicator */}
+        {isContinueMode && !isGenerating && (
+          <div className="max-w-3xl mx-auto mb-3">
+            <div className="flex items-center justify-between bg-mgx-accent/10 border border-mgx-accent/20 rounded-xl px-4 py-2">
+              <div className="flex items-center gap-2">
+                <MessageSquarePlus className="w-4 h-4 text-mgx-accent" />
+                <span className="text-sm text-mgx-text">
+                  Continuing on <span className="font-medium">{currentProject?.name}</span>
+                </span>
+              </div>
+              {onRegenerate && (
+                <button
+                  onClick={onRegenerate}
+                  className="flex items-center gap-1 px-3 py-1 text-xs font-medium
+                           text-mgx-text-muted hover:text-mgx-text
+                           bg-mgx-surface hover:bg-mgx-surface-light
+                           rounded-lg transition-all duration-200"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  Regenerate
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        
         <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
           <div className="relative flex items-end gap-3 bg-mgx-surface rounded-2xl border border-mgx-border 
                         focus-within:border-mgx-primary/50 focus-within:ring-2 focus-within:ring-mgx-primary/20
@@ -187,7 +243,10 @@ export function ChatArea({
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Describe your project..."
+              placeholder={isContinueMode 
+                ? "Describe what you want to change or add..." 
+                : "Describe your project..."
+              }
               disabled={isGenerating}
               rows={1}
               className="flex-1 bg-transparent text-mgx-text placeholder-mgx-text-muted
@@ -209,7 +268,10 @@ export function ChatArea({
             </button>
           </div>
           <p className="text-xs text-mgx-text-muted text-center mt-2">
-            Press Enter to send, Shift+Enter for new line
+            {isContinueMode 
+              ? "Your message will modify the existing project"
+              : "Press Enter to send, Shift+Enter for new line"
+            }
           </p>
         </form>
       </div>

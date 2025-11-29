@@ -237,6 +237,195 @@ class MetaGPTService:
             )
         
         return project_path
+    
+    async def continue_project(
+        self,
+        project_id: str,
+        existing_workspace: str,
+        new_requirement: str,
+        project_name: str = "",
+    ) -> Path:
+        """
+        Continue working on an existing project with new requirements.
+        
+        Args:
+            project_id: The existing project ID
+            existing_workspace: Path to the existing project workspace
+            new_requirement: The new requirement or modification request
+            project_name: Project name
+            
+        Returns:
+            Path to the project workspace
+        """
+        from metagpt.config2 import config
+        from metagpt.context import Context
+        from metagpt.roles import Architect, ProductManager
+        from metagpt.roles.di.data_analyst import DataAnalyst
+        from metagpt.roles.di.engineer2 import Engineer2
+        from metagpt.roles.di.team_leader import TeamLeader
+        from metagpt.team import Team
+        
+        if self.message_callback:
+            await self.message_callback(
+                "System",
+                f"Continuing project: {project_name or 'Existing Project'}",
+                "status"
+            )
+        
+        # Read existing code context if workspace exists
+        existing_code_context = ""
+        workspace_path = Path(existing_workspace) if existing_workspace else None
+        
+        if workspace_path and workspace_path.exists():
+            if self.message_callback:
+                await self.message_callback(
+                    "System",
+                    f"Analyzing existing codebase at: {workspace_path}",
+                    "status"
+                )
+            existing_code_context = await self._read_existing_code(workspace_path)
+        
+        # Build enhanced requirement with existing code context
+        enhanced_requirement = new_requirement
+        if existing_code_context:
+            enhanced_requirement = f"""{new_requirement}
+
+---
+EXISTING CODEBASE CONTEXT:
+{existing_code_context}
+---
+
+IMPORTANT: When making changes, consider the existing code structure above.
+Modify existing files when appropriate rather than creating entirely new ones.
+Maintain consistency with the existing coding style and architecture.
+"""
+        
+        # Configure context - use incremental mode if workspace exists
+        config.update_via_cli(
+            project_path=str(workspace_path) if workspace_path else "",
+            project_name=project_name,
+            inc=bool(workspace_path and workspace_path.exists()),
+            reqa_file="",
+            max_auto_summarize_code=0
+        )
+        ctx = Context(config=config)
+        
+        # Create environment with callback
+        env = create_web_mgx_env(context=ctx, message_callback=self.message_callback)
+        
+        # Create team
+        company = Team(context=ctx, use_mgx=False)
+        company.env = env
+        env.context = ctx
+        
+        # Hire roles
+        roles = [
+            TeamLeader(),
+            ProductManager(),
+            Architect(),
+            Engineer2(),
+            DataAnalyst(),
+        ]
+        company.hire(roles)
+        
+        if self.message_callback:
+            await self.message_callback(
+                "System",
+                "Team ready to process your request...",
+                "status"
+            )
+        
+        company.invest(self.investment)
+        
+        # Run with enhanced requirement
+        await company.run(n_round=self.n_round, idea=enhanced_requirement)
+        
+        # Get updated project path
+        final_path = self._get_project_path(ctx, config, workspace_path)
+        
+        if self.message_callback:
+            await self.message_callback(
+                "System",
+                f"Changes completed at: {final_path}",
+                "complete"
+            )
+        
+        return final_path
+    
+    async def _read_existing_code(self, workspace_path: Path) -> str:
+        """Read and summarize existing code from workspace"""
+        code_summary = []
+        max_files = 10  # Limit number of files to include
+        max_content_per_file = 500  # Max characters per file
+        
+        # File extensions to include
+        code_extensions = {'.py', '.ts', '.tsx', '.js', '.jsx', '.html', '.css', '.json', '.yaml', '.yml', '.md'}
+        
+        try:
+            files_processed = 0
+            for file_path in workspace_path.rglob("*"):
+                if files_processed >= max_files:
+                    break
+                    
+                if file_path.is_file() and file_path.suffix.lower() in code_extensions:
+                    # Skip node_modules, __pycache__, etc.
+                    if any(skip in str(file_path) for skip in ['node_modules', '__pycache__', '.git', 'dist', 'build']):
+                        continue
+                    
+                    try:
+                        relative_path = file_path.relative_to(workspace_path)
+                        content = file_path.read_text(encoding='utf-8', errors='ignore')
+                        
+                        # Truncate content if too long
+                        if len(content) > max_content_per_file:
+                            content = content[:max_content_per_file] + "\n... (truncated)"
+                        
+                        code_summary.append(f"File: {relative_path}\n```\n{content}\n```\n")
+                        files_processed += 1
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.warning(f"Error reading existing code: {e}")
+        
+        return "\n".join(code_summary) if code_summary else ""
+    
+    def _get_project_path(self, ctx, config, fallback_path: Path = None) -> Path:
+        """Get project path from various sources"""
+        project_path = None
+        
+        # Method 1: Try ctx.kwargs
+        if hasattr(ctx.kwargs, 'project_path') and ctx.kwargs.project_path:
+            project_path = Path(ctx.kwargs.project_path)
+            if project_path.exists():
+                return project_path
+        
+        # Method 2: Try config
+        try:
+            if config.project_path:
+                project_path = Path(config.project_path)
+                if project_path.exists():
+                    return project_path
+        except Exception:
+            pass
+        
+        # Method 3: Scan workspace
+        try:
+            from metagpt.const import DEFAULT_WORKSPACE_ROOT
+            workspace_root = DEFAULT_WORKSPACE_ROOT
+            if workspace_root.exists():
+                project_dirs = [d for d in workspace_root.iterdir() if d.is_dir() and not d.name.startswith('.')]
+                if project_dirs:
+                    return max(project_dirs, key=lambda x: x.stat().st_mtime)
+        except Exception:
+            pass
+        
+        # Method 4: Fallback
+        if fallback_path and fallback_path.exists():
+            return fallback_path
+        
+        # Final fallback
+        metagpt_root = Path(__file__).parent.parent.parent.parent
+        return metagpt_root / "workspace"
 
 
 class SimpleMetaGPTService:

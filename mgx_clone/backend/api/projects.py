@@ -95,6 +95,44 @@ async def get_project_file(project_id: str, file_path: str):
             raise HTTPException(status_code=400, detail="File is not text")
 
 
+@router.put("/{project_id}/files/{file_path:path}")
+async def save_project_file(project_id: str, file_path: str, request: dict):
+    """Save content to a specific file in the project."""
+    async with get_db() as db:
+        repo = ProjectRepository(db)
+        project = await repo.get_project(project_id)
+        
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        if not project.workspace_path:
+            raise HTTPException(status_code=404, detail="Project has no workspace")
+        
+        full_path = Path(project.workspace_path) / file_path
+        
+        # Security check: ensure path is within workspace
+        try:
+            full_path = full_path.resolve()
+            workspace_path = Path(project.workspace_path).resolve()
+            if not str(full_path).startswith(str(workspace_path)):
+                raise HTTPException(status_code=400, detail="Invalid file path")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid file path")
+        
+        if full_path.is_dir():
+            raise HTTPException(status_code=400, detail="Path is a directory")
+        
+        content = request.get("content", "")
+        
+        try:
+            # Create parent directories if needed
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content, encoding="utf-8")
+            return {"path": file_path, "message": "File saved successfully"}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+
+
 @router.get("/{project_id}/download")
 async def download_project(project_id: str):
     """Download project as a zip file."""

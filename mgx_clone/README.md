@@ -25,6 +25,10 @@ MGX Clone 是一个 Web 应用，允许用户通过自然语言描述需求，�
 - 📜 **历史记录**: 保存所有项目记录和对话历史
 - 💾 **消息持久化**: 项目生成过程中的所有消息保存到数据库
 - 🔄 **实时项目列表**: 创建项目后立即在侧边栏显示
+- ✏️ **Monaco Editor**: VS Code 同款代码编辑器，支持语法高亮
+- 📝 **代码在线编辑**: 直接在浏览器中编辑生成的代码并保存
+- 🔁 **多轮对话**: 支持追加需求修改已生成的项目（包含完整历史上下文）
+- 🔄 **项目重新生成**: 一键重新生成项目
 
 ---
 
@@ -214,14 +218,15 @@ mgx_clone/
 | updated_at     | TEXT | 更新时间 (ISO 8601)                               |
 
 **messages 表**
-| 字段         | 类型 | 说明                                          |
-|--------------|------|-----------------------------------------------|
-| id           | TEXT | 主键 (UUID)                                   |
-| project_id   | TEXT | 项目 ID (外键)                                |
-| agent        | TEXT | Agent 名称                                    |
-| content      | TEXT | 消息内容                                      |
-| message_type | TEXT | 类型 (agent_message/status/complete/error)    |
-| created_at   | TEXT | 创建时间 (ISO 8601)                           |
+| 字段               | 类型    | 说明                                               |
+|--------------------|---------|---------------------------------------------------|
+| id                 | TEXT    | 主键 (UUID)                                       |
+| project_id         | TEXT    | 项目 ID (外键)                                    |
+| agent              | TEXT    | Agent 名称                                        |
+| content            | TEXT    | 消息内容                                          |
+| message_type       | TEXT    | 类型 (user/agent_message/status/complete/error)   |
+| conversation_round | INTEGER | 对话轮次 (v0.2.0 新增，默认 1)                     |
+| created_at         | TEXT    | 创建时间 (ISO 8601)                               |
 
 ### 项目状态枚举
 | 状态 | 说明 |
@@ -236,7 +241,28 @@ mgx_clone/
 
 ## 版本历史
 
-### v0.1.0 (当前版本)
+### v0.2.0 (当前版本)
+
+#### 新增功能
+- ✅ **Monaco Editor 集成**: VS Code 同款代码编辑器，支持语法高亮
+- ✅ **代码在线编辑**: 直接编辑生成的代码并保存到文件
+- ✅ **多轮对话支持**: 在已完成项目上继续对话，追加需求修改
+- ✅ **完整对话历史**: 多轮对话时包含所有历史修改请求作为上下文
+- ✅ **项目重新生成**: 一键使用原始需求重新生成项目
+- ✅ **对话轮次追踪**: 数据库记录每条消息的对话轮次
+- ✅ **对话模式指示器**: 前端显示当前是新建项目还是继续对话模式
+
+#### API 更新
+- ✅ 新增 WebSocket 消息类型: `continue_conversation`
+- ✅ 新增 WebSocket 消息类型: `regenerate_project`
+- ✅ 新增 REST API: `PUT /api/projects/{id}/files/{path}` (保存文件)
+
+#### 数据库更新
+- ✅ messages 表新增 `conversation_round` 字段
+
+---
+
+### v0.1.0
 
 #### 核心功能
 - ✅ 项目创建和生成
@@ -270,13 +296,13 @@ mgx_clone/
 
 ## 开发计划
 
-### v0.2.0 - 用户体验优化
+### v0.2.0 - 用户体验优化 ✅ 已完成
 
 #### 高优先级
-- [ ] **Monaco Editor 集成**: 使用 VS Code 同款编辑器查看代码，支持语法高亮
-- [ ] **代码编辑功能**: 允许用户在线编辑生成的代码
-- [ ] **项目重新生成**: 支持基于反馈重新生成项目部分内容
-- [ ] **多轮对话**: 支持追加需求修改已生成的项目
+- [x] **Monaco Editor 集成**: 使用 VS Code 同款编辑器查看代码，支持语法高亮
+- [x] **代码编辑功能**: 允许用户在线编辑生成的代码
+- [x] **项目重新生成**: 支持基于反馈重新生成项目部分内容
+- [x] **多轮对话**: 支持追加需求修改已生成的项目（包含完整历史上下文）
 
 #### 中优先级
 - [ ] **项目模板**: 预设常用项目模板（React App、Vue App、API 服务等）
@@ -338,6 +364,7 @@ mgx_clone/
 | GET | `/api/projects/{id}` | 获取项目详情 |
 | GET | `/api/projects/{id}/files` | 获取项目文件列表 |
 | GET | `/api/projects/{id}/files/{path}` | 获取文件内容 |
+| PUT | `/api/projects/{id}/files/{path}` | **保存文件内容** (v0.2.0 新增) |
 | GET | `/api/projects/{id}/messages` | 获取项目消息历史 |
 | GET | `/api/projects/{id}/download` | 下载项目（ZIP） |
 | DELETE | `/api/projects/{id}` | 删除项目（软删除） |
@@ -348,6 +375,27 @@ mgx_clone/
 | 端点 | 说明 |
 |------|------|
 | `/ws/chat/{client_id}` | 聊天和项目生成 |
+
+### WebSocket 消息类型
+
+**客户端 → 服务端**
+
+| type | 说明 | 参数 |
+|------|------|------|
+| `create_project` | 创建新项目 | `name`, `requirement` |
+| `continue_conversation` | 多轮对话 (v0.2.0) | `project_id`, `message` |
+| `regenerate_project` | 重新生成 (v0.2.0) | `project_id` |
+| `ping` | 心跳检测 | - |
+
+**服务端 → 客户端**
+
+| type | 说明 |
+|------|------|
+| `agent_message` | Agent 消息 |
+| `status` | 状态更新 |
+| `complete` | 生成完成 |
+| `error` | 错误消息 |
+| `pong` | 心跳响应 |
 
 ---
 

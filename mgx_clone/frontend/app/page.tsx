@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Sidebar } from '@/components/Sidebar'
 import { ChatArea } from '@/components/ChatArea'
 import { CodePreview } from '@/components/CodePreview'
-import { Message, Project, FileInfo } from '@/lib/types'
+import { Message, Project, FileInfo, ConversationMode } from '@/lib/types'
 import { generateClientId } from '@/lib/utils'
 
 export default function Home() {
@@ -17,10 +17,12 @@ export default function Home() {
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null)
   const [fileContent, setFileContent] = useState<string>('')
   const [projectFiles, setProjectFiles] = useState<FileInfo[]>([])
+  const [conversationMode, setConversationMode] = useState<ConversationMode>('new_project')
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef<string>(generateClientId())
   const messageIdCounter = useRef<number>(0)
   const activeProjectIdRef = useRef<string | null>(null)  // Ref for WebSocket callback access
+  const currentProjectRef = useRef<Project | null>(null)  // Ref for WebSocket callback access
 
   // Generate unique message ID
   const generateMessageId = () => {
@@ -85,6 +87,7 @@ export default function Home() {
 
   const handleWebSocketMessage = (data: any) => {
     const messageProjectId = data.project_id
+    const conversationRound = data.conversation_round
     
     const newMessage: Message = {
       id: generateMessageId(),
@@ -93,6 +96,7 @@ export default function Home() {
       content: data.content,
       timestamp: new Date().toISOString(),
       projectId: messageProjectId,
+      conversationRound: conversationRound,
     }
 
     // Only add message if it belongs to the currently active project
@@ -109,6 +113,11 @@ export default function Home() {
         const lastUserMessage = userMessages[userMessages.length - 1]
         return lastUserMessage ? [lastUserMessage, newMessage] : [newMessage]
       })
+    } else if (data.type === 'status' && (data.status === 'continuing' || data.status === 'regenerating')) {
+      // Continuing conversation on existing project
+      activeProjectIdRef.current = messageProjectId
+      setActiveProjectId(messageProjectId)
+      setMessages((prev) => [...prev, newMessage])
     } else if (data.type === 'agent_message' || data.type === 'status') {
       // Only add if matches active project (use ref for latest value in closure)
       setMessages((prev) => {
@@ -121,8 +130,7 @@ export default function Home() {
     } else if (data.type === 'complete') {
       setMessages((prev) => [...prev, newMessage])
       setIsGenerating(false)
-      activeProjectIdRef.current = null
-      setActiveProjectId(null)  // Clear active project after completion
+      // Don't clear active project for continued conversations - keep it selected
       fetchProjects()
       if (messageProjectId) {
         loadProjectDetails(messageProjectId)
@@ -130,8 +138,6 @@ export default function Home() {
     } else if (data.type === 'error') {
       setMessages((prev) => [...prev, newMessage])
       setIsGenerating(false)
-      activeProjectIdRef.current = null
-      setActiveProjectId(null)  // Clear active project on error
     }
   }
 
@@ -158,6 +164,7 @@ export default function Home() {
       const messagesData = await messagesRes.json()
 
       setCurrentProject(project)
+      currentProjectRef.current = project  // Keep ref in sync
       setProjectFiles(filesData.files || [])
       
       // Load saved messages and add user's original requirement as first message
@@ -172,10 +179,11 @@ export default function Home() {
           content: project.requirement,
           timestamp: project.created_at,
           projectId: project.id,
+          conversationRound: 1,
         })
       }
       
-      // Add saved agent messages
+      // Add saved agent messages (including user messages from multi-turn)
       if (messagesData.messages && messagesData.messages.length > 0) {
         messagesData.messages.forEach((msg: any) => {
           savedMessages.push({
@@ -185,6 +193,7 @@ export default function Home() {
             content: msg.content,
             timestamp: msg.created_at,
             projectId: msg.project_id,
+            conversationRound: msg.conversation_round || 1,
           })
         })
       }
@@ -196,6 +205,9 @@ export default function Home() {
         setActiveProjectId(projectId)
       }
       setShowPreview(true)
+      
+      // Set conversation mode based on project status
+      setConversationMode(project.status === 'completed' ? 'continue_conversation' : 'new_project')
     } catch (error) {
       console.error('Failed to load project details:', error)
     }
@@ -216,6 +228,10 @@ export default function Home() {
     }
   }
 
+  const handleFileContentChange = useCallback((newContent: string) => {
+    setFileContent(newContent)
+  }, [])
+
   const handleSendMessage = (content: string) => {
     if (!content.trim() || isGenerating) return
 
@@ -226,22 +242,60 @@ export default function Home() {
       agent: 'User',
       content,
       timestamp: new Date().toISOString(),
+      projectId: currentProjectRef.current?.id,
     }
     setMessages((prev) => [...prev, userMessage])
-
-    // Extract project name from content or use default
-    const projectName = content.length > 30 
-      ? content.substring(0, 30) + '...'
-      : content
 
     // Send to WebSocket
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       setIsGenerating(true)
+      
+      // Check if we should continue conversation on existing project
+      if (currentProjectRef.current && currentProjectRef.current.status === 'completed') {
+        // Continue conversation
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'continue_conversation',
+            project_id: currentProjectRef.current.id,
+            message: content,
+          })
+        )
+      } else {
+        // Create new project
+        const projectName = content.length > 30 
+          ? content.substring(0, 30) + '...'
+          : content
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'create_project',
+            name: projectName,
+            requirement: content,
+          })
+        )
+      }
+    }
+  }
+
+  const handleRegenerateProject = () => {
+    if (!currentProject || isGenerating) return
+
+    // Add regenerate message
+    const regenMessage: Message = {
+      id: generateMessageId(),
+      type: 'user',
+      agent: 'User',
+      content: '🔄 Regenerate project',
+      timestamp: new Date().toISOString(),
+      projectId: currentProject.id,
+    }
+    setMessages((prev) => [...prev, regenMessage])
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setIsGenerating(true)
       wsRef.current.send(
         JSON.stringify({
-          type: 'create_project',
-          name: projectName,
-          requirement: content,
+          type: 'regenerate_project',
+          project_id: currentProject.id,
         })
       )
     }
@@ -270,9 +324,11 @@ export default function Home() {
           if (!isGenerating) {
             setMessages([])
             setCurrentProject(null)
+            currentProjectRef.current = null
             activeProjectIdRef.current = null
             setActiveProjectId(null)
             setShowPreview(false)
+            setConversationMode('new_project')
           }
         }}
       />
@@ -285,6 +341,9 @@ export default function Home() {
           isGenerating={isGenerating}
           onSendMessage={handleSendMessage}
           showPreview={showPreview}
+          currentProject={currentProject}
+          onRegenerate={handleRegenerateProject}
+          conversationMode={conversationMode}
         />
 
         {/* Code Preview */}
@@ -297,6 +356,7 @@ export default function Home() {
             onSelectFile={loadFileContent}
             onDownload={handleDownloadProject}
             onClose={() => setShowPreview(false)}
+            onFileContentChange={handleFileContentChange}
           />
         )}
       </div>
