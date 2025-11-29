@@ -20,11 +20,14 @@ export default function Home() {
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null)
   const [fileContent, setFileContent] = useState<string>('')
   const [projectFiles, setProjectFiles] = useState<FileInfo[]>([])
+  const [totalFilesCount, setTotalFilesCount] = useState<number>(0)
+  const [isFilesTruncated, setIsFilesTruncated] = useState(false)
   const [conversationMode, setConversationMode] = useState<ConversationMode>('new_project')
   const [showTemplateSelector, setShowTemplateSelector] = useState(false)
   const [progressInfo, setProgressInfo] = useState<ProgressInfo | null>(null)
   const [agentStates, setAgentStates] = useState<AgentState[]>([])
   const [failedProjectId, setFailedProjectId] = useState<string | null>(null)
+  const [isLoadingProject, setIsLoadingProject] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef<string>(generateClientId())
   const messageIdCounter = useRef<number>(0)
@@ -187,20 +190,20 @@ export default function Home() {
   }
 
   const loadProjectDetails = async (projectId: string) => {
+    setIsLoadingProject(true)
     try {
-      const [projectRes, filesRes, messagesRes] = await Promise.all([
+      // Load project and messages first (fast), files can be slightly delayed
+      const [projectRes, messagesRes] = await Promise.all([
         fetch(`http://localhost:8000/api/projects/${projectId}`),
-        fetch(`http://localhost:8000/api/projects/${projectId}/files`),
         fetch(`http://localhost:8000/api/projects/${projectId}/messages`),
       ])
 
       const project = await projectRes.json()
-      const filesData = await filesRes.json()
       const messagesData = await messagesRes.json()
 
+      // Update UI immediately with project and messages
       setCurrentProject(project)
       currentProjectRef.current = project  // Keep ref in sync
-      setProjectFiles(filesData.files || [])
       
       // Load saved messages and add user's original requirement as first message
       const savedMessages: Message[] = []
@@ -243,8 +246,20 @@ export default function Home() {
       
       // Set conversation mode based on project status
       setConversationMode(project.status === 'completed' ? 'continue_conversation' : 'new_project')
+      
+      // Load files in background (non-blocking)
+      fetch(`http://localhost:8000/api/projects/${projectId}/files`)
+        .then(res => res.json())
+        .then(filesData => {
+          setProjectFiles(filesData.files || [])
+          setTotalFilesCount(filesData.total || filesData.files?.length || 0)
+          setIsFilesTruncated(filesData.truncated || false)
+        })
+        .catch(err => console.error('Failed to load files:', err))
+        .finally(() => setIsLoadingProject(false))
     } catch (error) {
       console.error('Failed to load project details:', error)
+      setIsLoadingProject(false)
     }
   }
 
@@ -487,6 +502,9 @@ export default function Home() {
             onDownload={handleDownloadProject}
             onClose={() => setShowPreview(false)}
             onFileContentChange={handleFileContentChange}
+            isLoading={isLoadingProject}
+            totalFiles={totalFilesCount}
+            isTruncated={isFilesTruncated}
           />
         )}
       </div>

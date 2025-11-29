@@ -259,6 +259,13 @@ mgx_clone/
 - ✅ **Agent 状态可视化**: 右侧面板显示所有 Agent 的工作状态（待命/工作中/已完成）
 - ✅ **错误重试功能**: 生成失败时在错误消息下方显示重试按钮
 
+#### 性能优化
+- ✅ **文件列表 API 优化**: 排除 `node_modules`、`__pycache__` 等大型目录，限制返回文件数量（默认 500）
+- ✅ **移除 stat 调用**: 不再获取文件大小信息，大幅提升文件列表加载速度
+- ✅ **非阻塞加载**: 项目切换时优先加载消息历史，文件列表在后台加载
+- ✅ **useMemo 缓存**: 文件树结构使用 useMemo 缓存，避免重复构建
+- ✅ **文件截断提示**: 当文件数量超过限制时显示提示
+
 #### API 更新
 - ✅ 新增 REST API: `GET /api/templates` (获取所有模板)
 - ✅ 新增 REST API: `GET /api/templates/categories` (获取模板分类)
@@ -268,6 +275,7 @@ mgx_clone/
 - ✅ 新增 WebSocket 消息类型: `retry_project` (重试失败项目)
 - ✅ 新增 WebSocket 消息类型: `progress` (进度更新)
 - ✅ 新增 WebSocket 消息类型: `agent_status` (Agent 状态更新)
+- ✅ 更新 REST API: `GET /api/projects/{id}/files` 新增 `limit` 参数，返回 `total` 和 `truncated` 字段
 
 #### 前端更新
 - ✅ 新增 TemplateSelector 组件
@@ -275,6 +283,7 @@ mgx_clone/
 - ✅ 新增 AgentStatusPanel 组件
 - ✅ Sidebar 新增模板按钮
 - ✅ ChatArea 错误消息支持重试按钮
+- ✅ CodePreview 组件支持加载状态和文件截断提示
 
 ---
 

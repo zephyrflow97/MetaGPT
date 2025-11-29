@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useMemo } from 'react'
 import Editor, { OnMount } from '@monaco-editor/react'
 import type { editor } from 'monaco-editor'
 import {
@@ -17,6 +17,7 @@ import {
   Edit3,
   Lock,
   Loader2,
+  AlertCircle,
 } from 'lucide-react'
 import { Project, FileInfo } from '@/lib/types'
 import { cn, getFileLanguage, truncateText } from '@/lib/utils'
@@ -30,6 +31,9 @@ interface CodePreviewProps {
   onDownload: () => void
   onClose: () => void
   onFileContentChange?: (content: string) => void
+  isLoading?: boolean
+  totalFiles?: number
+  isTruncated?: boolean
 }
 
 export function CodePreview({
@@ -41,6 +45,9 @@ export function CodePreview({
   onDownload,
   onClose,
   onFileContentChange,
+  isLoading = false,
+  totalFiles,
+  isTruncated = false,
 }: CodePreviewProps) {
   const [viewMode, setViewMode] = useState<'code' | 'preview'>('code')
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['/']))
@@ -50,8 +57,8 @@ export function CodePreview({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
 
-  // Organize files into folder structure
-  const fileTree = buildFileTree(files)
+  // Memoize file tree to avoid rebuilding on every render
+  const fileTree = useMemo(() => buildFileTree(files), [files])
 
   const toggleFolder = (path: string) => {
     const newExpanded = new Set(expandedFolders)
@@ -250,16 +257,36 @@ export function CodePreview({
                 <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-mgx-text-muted">
                   <FolderOpen className="w-4 h-4" />
                   <span className="font-medium">Files</span>
-                  <span className="text-mgx-text-muted/60">({files.length})</span>
+                  <span className="text-mgx-text-muted/60">
+                    ({files.length}{isTruncated && totalFiles ? `/${totalFiles}` : ''})
+                  </span>
+                  {isLoading && <Loader2 className="w-3 h-3 animate-spin" />}
                 </div>
-                <FileTreeView
-                  tree={fileTree}
-                  selectedFile={selectedFile}
-                  expandedFolders={expandedFolders}
-                  onSelectFile={onSelectFile}
-                  onToggleFolder={toggleFolder}
-                  level={0}
-                />
+                
+                {/* Truncation warning */}
+                {isTruncated && (
+                  <div className="mx-2 mb-2 px-2 py-1.5 bg-mgx-warning/10 border border-mgx-warning/20 rounded-lg">
+                    <div className="flex items-center gap-1.5 text-xs text-mgx-warning">
+                      <AlertCircle className="w-3 h-3" />
+                      <span>Showing {files.length} of {totalFiles} files</span>
+                    </div>
+                  </div>
+                )}
+                
+                {isLoading && files.length === 0 ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-5 h-5 text-mgx-text-muted animate-spin" />
+                  </div>
+                ) : (
+                  <FileTreeView
+                    tree={fileTree}
+                    selectedFile={selectedFile}
+                    expandedFolders={expandedFolders}
+                    onSelectFile={onSelectFile}
+                    onToggleFolder={toggleFolder}
+                    level={0}
+                  />
+                )}
               </div>
             </div>
 

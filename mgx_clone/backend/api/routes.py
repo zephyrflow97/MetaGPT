@@ -106,9 +106,59 @@ async def get_messages(project_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Directories to exclude from file listing (performance optimization)
+EXCLUDED_DIRS = {
+    "node_modules",
+    "__pycache__",
+    ".git",
+    ".venv",
+    "venv",
+    ".env",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    ".output",
+    ".cache",
+    ".turbo",
+    "coverage",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "eggs",
+    "*.egg-info",
+    ".tox",
+    ".nox",
+    "htmlcov",
+    ".hypothesis",
+    "target",  # Rust
+    "vendor",  # Go
+}
+
+# Maximum number of files to return
+MAX_FILES = 500
+
+
+def should_exclude_path(path: Path) -> bool:
+    """Check if a path should be excluded from file listing"""
+    parts = path.parts
+    for part in parts:
+        if part in EXCLUDED_DIRS:
+            return True
+        # Handle patterns like *.egg-info
+        if part.endswith(".egg-info"):
+            return True
+    return False
+
+
 @router.get("/projects/{project_id}/files")
-async def get_project_files(project_id: str):
-    """Get list of files in a project"""
+async def get_project_files(project_id: str, limit: int = MAX_FILES):
+    """Get list of files in a project
+    
+    Args:
+        project_id: The project ID
+        limit: Maximum number of files to return (default: 500)
+    """
     try:
         project = await get_project(project_id)
         if not project:
@@ -116,21 +166,43 @@ async def get_project_files(project_id: str):
         
         workspace_path = project.get("workspace_path")
         if not workspace_path or not Path(workspace_path).exists():
-            return {"files": [], "message": "Project workspace not found"}
+            return {"files": [], "total": 0, "truncated": False}
         
         files = []
+        total_count = 0
         workspace = Path(workspace_path)
-        for file_path in workspace.rglob("*"):
-            if file_path.is_file() and ".git" not in str(file_path):
-                relative_path = file_path.relative_to(workspace)
-                files.append({
-                    "name": file_path.name,
-                    "path": str(relative_path),
-                    "size": file_path.stat().st_size,
-                    "extension": file_path.suffix,
-                })
         
-        return {"files": files}
+        # Use os.walk for better performance with early directory exclusion
+        import os
+        for root, dirs, filenames in os.walk(workspace):
+            # Modify dirs in-place to skip excluded directories
+            dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS and not d.endswith(".egg-info")]
+            
+            root_path = Path(root)
+            for filename in filenames:
+                file_path = root_path / filename
+                relative_path = file_path.relative_to(workspace)
+                
+                # Skip hidden files at root level
+                if str(relative_path).startswith("."):
+                    continue
+                
+                total_count += 1
+                
+                # Only add up to limit files
+                if len(files) < limit:
+                    files.append({
+                        "name": filename,
+                        "path": str(relative_path),
+                        "size": 0,  # Skip stat() call for performance
+                        "extension": file_path.suffix,
+                    })
+        
+        return {
+            "files": files,
+            "total": total_count,
+            "truncated": total_count > limit,
+        }
     except HTTPException:
         raise
     except Exception as e:
