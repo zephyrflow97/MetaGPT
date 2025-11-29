@@ -18,6 +18,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+# 但不忽略前端的 lib 目录
+!mgx_clone/frontend/lib/
 parts/
 sdist/
 var/
