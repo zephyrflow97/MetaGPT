@@ -2,8 +2,9 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
 import { User, AuthResponse, LoginRequest, RegisterRequest } from './types'
+import { getApiBase } from './config'
 
-const API_BASE = 'http://localhost:8000/api'
+const API_BASE = getApiBase() + '/api'
 
 interface AuthContextType {
   user: User | null
