@@ -73,10 +73,7 @@ export function ChatArea({
   }
 
   return (
-    <div className={cn(
-      'flex flex-col h-full transition-all duration-300',
-      showPreview ? 'w-1/2' : 'flex-1'
-    )}>
+    <div className="flex flex-col h-full transition-all duration-300 flex-1">
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-6">
         {messages.length === 0 ? (
@@ -114,7 +111,7 @@ export function ChatArea({
             </div>
           </div>
         ) : (
-          <div className="space-y-4 max-w-3xl mx-auto">
+          <div className="space-y-4">
             {messages.map((message, index) => {
               // Check if we need to show a round separator
               const prevMessage = index > 0 ? messages[index - 1] : null
@@ -228,7 +225,7 @@ export function ChatArea({
       <div className="border-t border-mgx-border p-4">
         {/* Continue mode indicator */}
         {isContinueMode && !isGenerating && (
-          <div className="max-w-3xl mx-auto mb-3">
+          <div className="mb-3">
             <div className="flex items-center justify-between bg-mgx-accent/10 border border-mgx-accent/20 rounded-xl px-4 py-2">
               <div className="flex items-center gap-2">
                 <MessageSquarePlus className="w-4 h-4 text-mgx-accent" />
@@ -252,7 +249,7 @@ export function ChatArea({
           </div>
         )}
         
-        <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
+        <form onSubmit={handleSubmit}>
           <div className="relative flex items-end gap-3 bg-mgx-surface rounded-2xl border border-mgx-border 
                         focus-within:border-mgx-primary/50 focus-within:ring-2 focus-within:ring-mgx-primary/20
                         transition-all duration-200">

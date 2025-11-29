@@ -538,7 +538,7 @@ export default function Home() {
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Chat Area with Progress */}
-        <div className="flex flex-col flex-1 overflow-hidden">
+        <div className={`flex flex-col overflow-hidden ${showPreview && currentProject && !isGenerating ? 'w-1/2' : 'flex-1'}`}>
           {/* Progress Bar - Shows during generation */}
           {isGenerating && (
             <div className="px-6 pt-4">
