@@ -7,4 +7,5 @@ export { AgentStatusPanel } from './AgentStatusPanel'
 export { ShareDialog } from './ShareDialog'
 export { TagManager } from './TagManager'
 export { TagSelector } from './TagSelector'
+export { ClarificationDialog } from './ClarificationDialog'
 

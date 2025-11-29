@@ -6,8 +6,12 @@ Handles real-time communication for project generation
 """
 import asyncio
 import json
+import logging
 import traceback
-from typing import Optional
+import uuid
+from typing import Optional, Callable
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
@@ -27,6 +31,74 @@ from mgx_clone.backend.storage.database import (
 )
 
 router = APIRouter()
+
+
+class PendingQuestionManager:
+    """Manages pending questions waiting for user responses"""
+    
+    def __init__(self):
+        # question_id -> {event, project_id, client_id, content}
+        self._pending: dict[str, dict] = {}
+        # question_id -> response
+        self._responses: dict[str, str] = {}
+    
+    def create_question(
+        self, 
+        project_id: str, 
+        client_id: str, 
+        content: str,
+        question_type: str = "inline",
+        options: Optional[list[str]] = None
+    ) -> tuple[str, asyncio.Event]:
+        """Create a new pending question and return its ID and event"""
+        question_id = f"q-{uuid.uuid4().hex[:12]}"
+        event = asyncio.Event()
+        self._pending[question_id] = {
+            "event": event,
+            "project_id": project_id,
+            "client_id": client_id,
+            "content": content,
+            "question_type": question_type,
+            "options": options,
+        }
+        return question_id, event
+    
+    def has_question(self, question_id: str) -> bool:
+        """Check if a question is pending"""
+        return question_id in self._pending
+    
+    def get_question(self, question_id: str) -> Optional[dict]:
+        """Get pending question info"""
+        return self._pending.get(question_id)
+    
+    def resolve_question(self, question_id: str, response: str) -> bool:
+        """Resolve a pending question with user's response"""
+        if question_id not in self._pending:
+            return False
+        
+        self._responses[question_id] = response
+        self._pending[question_id]["event"].set()
+        return True
+    
+    def get_response(self, question_id: str) -> Optional[str]:
+        """Get and remove the response for a question"""
+        return self._responses.pop(question_id, None)
+    
+    def cleanup_question(self, question_id: str):
+        """Remove a question from pending (after timeout or response)"""
+        self._pending.pop(question_id, None)
+        self._responses.pop(question_id, None)
+    
+    def get_pending_for_client(self, client_id: str) -> Optional[dict]:
+        """Get any pending question for a client"""
+        for q_id, info in self._pending.items():
+            if info["client_id"] == client_id:
+                return {"question_id": q_id, **info}
+        return None
+
+
+# Global pending question manager
+pending_questions = PendingQuestionManager()
 
 # Agent 列表用于进度追踪
 AGENT_WORKFLOW = [
@@ -65,6 +137,29 @@ class ConnectionManager:
                 await self.active_connections[client_id].send_json(message)
             except Exception:
                 self.disconnect(client_id)
+    
+    async def send_clarification(
+        self,
+        client_id: str,
+        question_id: str,
+        agent: str,
+        content: str,
+        project_id: str,
+        question_type: str = "inline",
+        options: Optional[list[str]] = None,
+    ):
+        """Send a clarification request to the client"""
+        message = {
+            "type": "clarification",
+            "agent": agent,
+            "content": content,
+            "project_id": project_id,
+            "question_id": question_id,
+            "question_type": question_type,
+        }
+        if options:
+            message["options"] = options
+        await self.send_message(client_id, message)
     
     async def broadcast(self, message: dict):
         disconnected = []
@@ -132,15 +227,22 @@ async def websocket_endpoint(
             msg_type = message.get("type")
             
             if msg_type == "create_project":
-                await handle_create_project(client_id, message)
+                # Run in background task to avoid blocking message loop
+                # This allows user_response messages to be processed while project is generating
+                asyncio.create_task(handle_create_project(client_id, message))
             elif msg_type == "create_from_template":
-                await handle_create_from_template(client_id, message)
+                asyncio.create_task(handle_create_from_template(client_id, message))
             elif msg_type == "continue_conversation":
-                await handle_continue_conversation(client_id, message)
+                asyncio.create_task(handle_continue_conversation(client_id, message))
             elif msg_type == "regenerate_project":
-                await handle_regenerate_project(client_id, message)
+                asyncio.create_task(handle_regenerate_project(client_id, message))
             elif msg_type == "retry_project":
-                await handle_retry_project(client_id, message)
+                asyncio.create_task(handle_retry_project(client_id, message))
+            elif msg_type == "user_response":
+                # Handle immediately - unblocks waiting ask_human calls
+                await handle_user_response(client_id, message)
+            elif msg_type == "skip_question":
+                await handle_skip_question(client_id, message)
             elif msg_type == "ping":
                 await manager.send_message(client_id, {"type": "pong"})
             else:
@@ -269,8 +371,18 @@ async def handle_create_project(client_id: str, message: dict):
             "agent_states": initial_states,
         })
         
+        # Create ask_human callback for this project
+        ask_human_cb = create_ask_human_callback(
+            client_id=client_id,
+            project_id=project_id,
+            timeout=300.0  # 5 minutes timeout
+        )
+        
         # Initialize MetaGPT service and run
-        service = MetaGPTService(message_callback=message_callback)
+        service = MetaGPTService(
+            message_callback=message_callback,
+            ask_human_callback=ask_human_cb
+        )
         workspace_path = await service.generate_project(requirement, name)
         
         # Update project with workspace path and completed status
@@ -421,8 +533,18 @@ Location: {workspace_path}
 5. Maintain consistency with the existing coding style and architecture
 """
         
+        # Create ask_human callback for this project
+        ask_human_cb = create_ask_human_callback(
+            client_id=client_id,
+            project_id=project_id,
+            timeout=300.0
+        )
+        
         # Initialize MetaGPT service and run with context
-        service = MetaGPTService(message_callback=message_callback)
+        service = MetaGPTService(
+            message_callback=message_callback,
+            ask_human_callback=ask_human_cb
+        )
         workspace_path = await service.continue_project(
             project_id=project_id,
             existing_workspace=workspace_path,
@@ -512,8 +634,18 @@ async def handle_regenerate_project(client_id: str, message: dict):
     try:
         await update_project_status(project_id, "running")
         
+        # Create ask_human callback for this project
+        ask_human_cb = create_ask_human_callback(
+            client_id=client_id,
+            project_id=project_id,
+            timeout=300.0
+        )
+        
         # Re-run generation with original requirement
-        service = MetaGPTService(message_callback=message_callback)
+        service = MetaGPTService(
+            message_callback=message_callback,
+            ask_human_callback=ask_human_cb
+        )
         workspace_path = await service.generate_project(
             requirement=project.get("requirement", ""),
             project_name=project.get("name", "")
@@ -707,8 +839,18 @@ async def handle_retry_project(client_id: str, message: dict):
             "agent_states": initial_states,
         })
         
+        # Create ask_human callback for this project
+        ask_human_cb = create_ask_human_callback(
+            client_id=client_id,
+            project_id=project_id,
+            timeout=300.0
+        )
+        
         # Re-run generation with original requirement
-        service = MetaGPTService(message_callback=message_callback)
+        service = MetaGPTService(
+            message_callback=message_callback,
+            ask_human_callback=ask_human_cb
+        )
         workspace_path = await service.generate_project(
             requirement=project.get("requirement", ""),
             project_name=project.get("name", "")
@@ -748,3 +890,196 @@ async def handle_retry_project(client_id: str, message: dict):
             "project_id": project_id,
             "can_retry": True,
         })
+
+
+async def handle_user_response(client_id: str, message: dict):
+    """Handle user response to an Agent's clarification question"""
+    question_id = message.get("question_id")
+    response = message.get("response", "")
+    project_id = message.get("project_id")
+    
+    logger.info(f"[user_response] Received: question_id={question_id}, response={response[:50] if response else 'empty'}...")
+    logger.info(f"[user_response] Pending questions: {list(pending_questions._pending.keys())}")
+    
+    if not question_id:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "question_id is required for user_response"
+        })
+        return
+    
+    # Validate the question exists and belongs to this client
+    question_info = pending_questions.get_question(question_id)
+    logger.info(f"[user_response] question_info: {question_info}")
+    if not question_info:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "Question not found or already answered",
+            "question_id": question_id
+        })
+        return
+    
+    if question_info["client_id"] != client_id:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "This question does not belong to your session"
+        })
+        return
+    
+    if project_id and question_info["project_id"] != project_id:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "Project ID mismatch"
+        })
+        return
+    
+    # Save user response to database
+    await save_message(
+        project_id=question_info["project_id"],
+        agent="User",
+        content=response,
+        message_type="user_response"
+    )
+    
+    # Resolve the pending question - this will unblock the waiting Agent
+    pending_questions.resolve_question(question_id, response)
+    
+    # Acknowledge the response
+    await manager.send_message(client_id, {
+        "type": "response_received",
+        "question_id": question_id,
+        "project_id": question_info["project_id"]
+    })
+
+
+async def handle_skip_question(client_id: str, message: dict):
+    """Handle user skipping a clarification question (use default)"""
+    question_id = message.get("question_id")
+    
+    if not question_id:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "question_id is required"
+        })
+        return
+    
+    question_info = pending_questions.get_question(question_id)
+    if not question_info:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "Question not found or already answered"
+        })
+        return
+    
+    if question_info["client_id"] != client_id:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "This question does not belong to your session"
+        })
+        return
+    
+    # Use a default response indicating skip
+    default_response = "[SKIPPED - Use default behavior]"
+    
+    # Save skip action to database
+    await save_message(
+        project_id=question_info["project_id"],
+        agent="User",
+        content="[Skipped question - using default]",
+        message_type="user_response"
+    )
+    
+    # Resolve with default
+    pending_questions.resolve_question(question_id, default_response)
+    
+    await manager.send_message(client_id, {
+        "type": "response_received",
+        "question_id": question_id,
+        "project_id": question_info["project_id"],
+        "skipped": True
+    })
+
+
+def create_ask_human_callback(
+    client_id: str,
+    project_id: str,
+    timeout: float = 300.0
+) -> Callable:
+    """
+    Create a callback function for ask_human that sends questions via WebSocket
+    and waits for user responses.
+    
+    This function is used by MetaGPTService to enable Agent-user interaction.
+    """
+    async def ask_human_callback(
+        agent: str,
+        question: str,
+        question_type: str = "inline",
+        options: Optional[list[str]] = None
+    ) -> str:
+        """
+        Send a question to the user and wait for their response.
+        
+        Args:
+            agent: Name of the agent asking the question
+            question: The question content
+            question_type: "inline" for chat display, "modal" for popup dialog
+            options: Optional list of predefined answer options
+            
+        Returns:
+            User's response string
+            
+        Raises:
+            asyncio.TimeoutError: If user doesn't respond within timeout
+        """
+        # Create pending question
+        question_id, event = pending_questions.create_question(
+            project_id=project_id,
+            client_id=client_id,
+            content=question,
+            question_type=question_type,
+            options=options
+        )
+        logger.info(f"[ask_human] Created question: {question_id} for client: {client_id}")
+        
+        # Save clarification to database
+        await save_message(
+            project_id=project_id,
+            agent=agent,
+            content=question,
+            message_type="clarification"
+        )
+        
+        # Send question to client
+        await manager.send_clarification(
+            client_id=client_id,
+            question_id=question_id,
+            agent=agent,
+            content=question,
+            project_id=project_id,
+            question_type=question_type,
+            options=options
+        )
+        
+        try:
+            # Wait for user response with timeout
+            logger.info(f"[ask_human] Waiting for response to question: {question_id}, timeout: {timeout}s")
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+            response = pending_questions.get_response(question_id)
+            logger.info(f"[ask_human] Got response for {question_id}: {response[:50] if response else 'empty'}...")
+            return response or ""
+        except asyncio.TimeoutError:
+            # Cleanup on timeout
+            logger.warning(f"[ask_human] Question {question_id} timed out after {timeout}s")
+            pending_questions.cleanup_question(question_id)
+            await manager.send_message(client_id, {
+                "type": "question_timeout",
+                "question_id": question_id,
+                "project_id": project_id,
+                "content": "Question timed out, using default behavior"
+            })
+            return "[TIMEOUT - Use default behavior]"
+        finally:
+            pending_questions.cleanup_question(question_id)
+    
+    return ask_human_callback

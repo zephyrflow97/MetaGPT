@@ -197,11 +197,12 @@ mgx_clone/
 │   │   ├── CodePreview.tsx     # 代码/预览面板
 │   │   ├── TemplateSelector.tsx # 模板选择器 (v0.2.1 新增)
 │   │   ├── ProgressBar.tsx     # 进度条组件 (v0.2.1 新增)
-│   │   ├── AgentStatusPanel.tsx # Agent 状态面板 (v0.2.1 新增)
-│   │   ├── ShareDialog.tsx     # 分享对话框 (v0.3.0 新增)
-│   │   ├── TagManager.tsx      # 标签管理 (v0.3.0 新增)
-│   │   ├── TagSelector.tsx     # 标签选择器 (v0.3.0 新增)
-│   │   └── index.ts            # 组件导出
+│   │   ├── AgentStatusPanel.tsx   # Agent 状态面板 (v0.2.1 新增)
+│   │   ├── ShareDialog.tsx       # 分享对话框 (v0.3.0 新增)
+│   │   ├── TagManager.tsx        # 标签管理 (v0.3.0 新增)
+│   │   ├── TagSelector.tsx       # 标签选择器 (v0.3.0 新增)
+│   │   ├── ClarificationDialog.tsx # 澄清对话框 (v0.4.0 新增)
+│   │   └── index.ts              # 组件导出
 │   ├── lib/
 │   │   ├── auth-context.tsx    # 认证状态 Context (v0.3.0 新增)
 │   │   ├── types.ts            # TypeScript 类型定义
@@ -275,7 +276,7 @@ mgx_clone/
 | project_id         | TEXT    | 项目 ID (外键)                                    |
 | agent              | TEXT    | Agent 名称                                        |
 | content            | TEXT    | 消息内容                                          |
-| message_type       | TEXT    | 类型 (user/agent_message/status/complete/error)   |
+| message_type       | TEXT    | 类型 (user/agent_message/status/complete/error/clarification/user_response)   |
 | conversation_round | INTEGER | 对话轮次 (v0.2.0 新增，默认 1)                     |
 | created_at         | TEXT    | 创建时间 (ISO 8601)                               |
 
@@ -318,7 +319,39 @@ mgx_clone/
 
 ## 版本历史
 
-### v0.3.0 (当前版本)
+### v0.4.0 (当前版本)
+
+#### 新增功能 - 用户交互对齐
+
+- ✅ **Agent 提问功能**: Agent 在需求模糊时可主动向用户提问，请求补充细节
+- ✅ **用户回答机制**: 用户可在聊天界面直接回答 Agent 问题，或通过弹窗对话框回答
+- ✅ **跳过问题**: 用户可选择跳过问题，使用默认行为继续
+- ✅ **问题超时处理**: 问题等待 5 分钟无响应后自动使用默认值
+- ✅ **快捷选项**: Agent 可提供预设选项供用户快速选择
+- ✅ **状态指示**: 输入框在回答问题模式时显示特殊样式
+
+#### API 更新
+- ✅ 新增 WebSocket 消息类型: `clarification` (Agent 提问)
+- ✅ 新增 WebSocket 消息类型: `user_response` (用户回答)
+- ✅ 新增 WebSocket 消息类型: `skip_question` (跳过问题)
+- ✅ 新增 WebSocket 消息类型: `response_received` (回答确认)
+- ✅ 新增 WebSocket 消息类型: `question_timeout` (问题超时)
+- ✅ 新增 WebSocket 消息类型: `reply_to_human` (Agent 反馈)
+
+#### 前端更新
+- ✅ 新增 ClarificationDialog 弹窗组件
+- ✅ ChatArea 支持显示澄清问题和快捷选项
+- ✅ 输入框支持回答问题模式（特殊样式和行为）
+- ✅ 新增 PendingQuestion 类型定义
+
+#### 后端更新
+- ✅ WebMGXEnv 覆写 ask_human/reply_to_human 方法
+- ✅ 新增 PendingQuestionManager 管理等待中的问题
+- ✅ MetaGPTService 支持 ask_human_callback 回调
+
+---
+
+### v0.3.0
 
 #### 新增功能 - 用户认证
 - ✅ **用户注册/登录**: 完整的 JWT 认证系统
@@ -617,6 +650,8 @@ mgx_clone/
 | `continue_conversation` | 多轮对话 (v0.2.0) | `project_id`, `message` |
 | `regenerate_project` | 重新生成 (v0.2.0) | `project_id` |
 | `retry_project` | **重试失败项目** (v0.2.1) | `project_id` |
+| `user_response` | **用户回答 Agent 问题** (v0.4.0) | `question_id`, `project_id`, `response` |
+| `skip_question` | **跳过问题使用默认值** (v0.4.0) | `question_id` |
 | `ping` | 心跳检测 | - |
 
 **服务端 → 客户端**
@@ -629,6 +664,10 @@ mgx_clone/
 | `error` | 错误消息（含 `can_retry` 字段） |
 | `progress` | **进度更新** (v0.2.1) - 含 `progress` 和 `agent_states` |
 | `agent_status` | **Agent 状态更新** (v0.2.1) - 含 `agent_states` |
+| `clarification` | **Agent 向用户提问** (v0.4.0) - 含 `question_id`, `question_type`, `options` |
+| `response_received` | **用户回答已收到** (v0.4.0) |
+| `question_timeout` | **问题超时** (v0.4.0) |
+| `reply_to_human` | **Agent 反馈给用户** (v0.4.0) |
 | `pong` | 心跳响应 |
 
 ---

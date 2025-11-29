@@ -22,25 +22,44 @@ if TYPE_CHECKING:
     from metagpt.team import Team
 
 
-def create_web_mgx_env(context, message_callback: Optional[Callable] = None):
+def create_web_mgx_env(
+    context, 
+    message_callback: Optional[Callable] = None,
+    ask_human_callback: Optional[Callable] = None,
+):
     """
     Factory function to create a WebMGXEnv with message callback support.
     Uses lazy import to avoid config validation on module load.
+    
+    Args:
+        context: MetaGPT context object
+        message_callback: Async callback for sending messages to frontend
+            Signature: async (agent: str, content: str, msg_type: str) -> None
+        ask_human_callback: Async callback for asking questions to user
+            Signature: async (agent: str, question: str, question_type: str, options: list) -> str
     """
     from metagpt.environment.mgx.mgx_env import MGXEnv
-    from metagpt.logs import logger
+    from metagpt.logs import logger, set_human_input_func
     
     class WebMGXEnv(MGXEnv):
         """
         Extended MGXEnv with message callback support for web applications.
         Sends real-time updates to the frontend via callback function.
+        Supports interactive user clarification via ask_human.
         """
         
         _message_callback: Optional[Callable] = None
+        _ask_human_callback: Optional[Callable] = None
         
-        def __init__(self, msg_callback: Optional[Callable] = None, **kwargs):
+        def __init__(
+            self, 
+            msg_callback: Optional[Callable] = None,
+            ask_callback: Optional[Callable] = None,
+            **kwargs
+        ):
             super().__init__(**kwargs)
             self._message_callback = msg_callback
+            self._ask_human_callback = ask_callback
         
         def _publish_message(self, message, peekable: bool = True) -> bool:
             """Override to add callback notification"""
@@ -74,6 +93,47 @@ def create_web_mgx_env(context, message_callback: Optional[Callable] = None):
             
             return result
         
+        async def ask_human(self, question: str, sent_from=None) -> str:
+            """
+            Override to send questions to frontend via WebSocket.
+            Waits for user response before continuing.
+            """
+            if self._ask_human_callback:
+                agent_name = sent_from.name if sent_from else "System"
+                try:
+                    # Call the ask_human callback which will:
+                    # 1. Send question to frontend via WebSocket
+                    # 2. Wait for user response
+                    # 3. Return the response
+                    response = await self._ask_human_callback(
+                        agent=agent_name,
+                        question=question,
+                        question_type="inline",  # Can be overridden based on question content
+                        options=None
+                    )
+                    return f"Human response: {response}"
+                except asyncio.TimeoutError:
+                    logger.warning(f"ask_human timed out for question: {question[:50]}...")
+                    return "Human response: [No response - proceeding with defaults]"
+                except Exception as e:
+                    logger.error(f"Error in ask_human: {e}")
+                    return f"Human response: [Error getting response: {e}]"
+            else:
+                # Fallback to parent implementation if no callback
+                return await super().ask_human(question, sent_from)
+        
+        async def reply_to_human(self, content: str, sent_from=None) -> str:
+            """
+            Override to send replies to frontend via WebSocket.
+            """
+            if self._message_callback:
+                agent_name = sent_from.name if sent_from else "System"
+                try:
+                    await self._message_callback(agent_name, content, "reply_to_human")
+                except Exception as e:
+                    logger.warning(f"Failed to send reply_to_human: {e}")
+            return "SUCCESS, human has received your reply."
+        
         async def run(self, k=1):
             """Override run to add status updates"""
             if self._message_callback:
@@ -84,22 +144,41 @@ def create_web_mgx_env(context, message_callback: Optional[Callable] = None):
             if self._message_callback:
                 await self._message_callback("System", "Environment cycle completed", "status")
     
-    return WebMGXEnv(context=context, msg_callback=message_callback)
+    return WebMGXEnv(
+        context=context, 
+        msg_callback=message_callback,
+        ask_callback=ask_human_callback
+    )
 
 
 class MetaGPTService:
     """
     Service class to manage MetaGPT project generation.
     Provides a clean interface for the web API to interact with MetaGPT.
+    
+    Supports interactive user clarification via ask_human_callback.
     """
     
     def __init__(
         self,
         message_callback: Optional[Callable] = None,
+        ask_human_callback: Optional[Callable] = None,
         investment: float = 3.0,
         n_round: int = 5,
     ):
+        """
+        Initialize MetaGPT service.
+        
+        Args:
+            message_callback: Async callback for sending messages to frontend
+                Signature: async (agent: str, content: str, msg_type: str) -> None
+            ask_human_callback: Async callback for asking questions to user
+                Signature: async (agent: str, question: str, question_type: str, options: list) -> str
+            investment: Investment amount for the project
+            n_round: Number of rounds for project generation
+        """
         self.message_callback = message_callback
+        self.ask_human_callback = ask_human_callback
         self.investment = investment
         self.n_round = n_round
     
@@ -145,8 +224,12 @@ class MetaGPTService:
         )
         ctx = Context(config=config)
         
-        # Create environment with callback
-        env = create_web_mgx_env(context=ctx, message_callback=self.message_callback)
+        # Create environment with callbacks
+        env = create_web_mgx_env(
+            context=ctx, 
+            message_callback=self.message_callback,
+            ask_human_callback=self.ask_human_callback
+        )
         
         # Create team with the web environment
         company = Team(context=ctx, use_mgx=False)
@@ -310,8 +393,12 @@ Maintain consistency with the existing coding style and architecture.
         )
         ctx = Context(config=config)
         
-        # Create environment with callback
-        env = create_web_mgx_env(context=ctx, message_callback=self.message_callback)
+        # Create environment with callbacks
+        env = create_web_mgx_env(
+            context=ctx, 
+            message_callback=self.message_callback,
+            ask_human_callback=self.ask_human_callback
+        )
         
         # Create team
         company = Team(context=ctx, use_mgx=False)

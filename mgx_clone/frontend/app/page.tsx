@@ -9,7 +9,8 @@ import { CodePreview } from '@/components/CodePreview'
 import { TemplateSelector } from '@/components/TemplateSelector'
 import { ProgressBar } from '@/components/ProgressBar'
 import { AgentStatusPanel } from '@/components/AgentStatusPanel'
-import { Message, Project, FileInfo, ConversationMode, ProgressInfo, AgentState, ProjectTemplate } from '@/lib/types'
+import { ClarificationDialog } from '@/components/ClarificationDialog'
+import { Message, Project, FileInfo, ConversationMode, ProgressInfo, AgentState, ProjectTemplate, PendingQuestion } from '@/lib/types'
 import { generateClientId } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-context'
 import { Sparkles, ArrowRight, LogIn, UserPlus } from 'lucide-react'
@@ -34,6 +35,8 @@ export default function Home() {
   const [agentStates, setAgentStates] = useState<AgentState[]>([])
   const [failedProjectId, setFailedProjectId] = useState<string | null>(null)
   const [isLoadingProject, setIsLoadingProject] = useState(false)
+  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null)
+  const [showClarificationDialog, setShowClarificationDialog] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const clientIdRef = useRef<string>(generateClientId())
   const messageIdCounter = useRef<number>(0)
@@ -129,6 +132,65 @@ export default function Home() {
       return  // Don't create a message for agent status updates
     }
     
+    // Handle clarification request from Agent
+    if (data.type === 'clarification') {
+      console.log('[clarification] Received:', data)
+      const question: PendingQuestion = {
+        questionId: data.question_id,
+        projectId: messageProjectId,
+        agent: data.agent || 'System',
+        content: data.content,
+        questionType: data.question_type || 'inline',
+        options: data.options,
+        timestamp: new Date().toISOString(),
+      }
+      console.log('[clarification] Setting pendingQuestion:', question)
+      setPendingQuestion(question)
+      
+      // Show modal dialog for 'modal' type, otherwise handle inline
+      if (data.question_type === 'modal') {
+        setShowClarificationDialog(true)
+      }
+      
+      // Also add as a message for display in chat
+      const clarificationMessage: Message = {
+        id: generateMessageId(),
+        type: 'clarification',
+        agent: data.agent || 'System',
+        content: data.content,
+        timestamp: new Date().toISOString(),
+        projectId: messageProjectId,
+        questionId: data.question_id,
+        questionType: data.question_type || 'inline',
+        options: data.options,
+      }
+      setMessages((prev) => [...prev, clarificationMessage])
+      return
+    }
+    
+    // Handle response acknowledgment
+    if (data.type === 'response_received') {
+      setPendingQuestion(null)
+      setShowClarificationDialog(false)
+      return
+    }
+    
+    // Handle question timeout
+    if (data.type === 'question_timeout') {
+      setPendingQuestion(null)
+      setShowClarificationDialog(false)
+      const timeoutMessage: Message = {
+        id: generateMessageId(),
+        type: 'status',
+        agent: 'System',
+        content: data.content || 'Question timed out, using default behavior',
+        timestamp: new Date().toISOString(),
+        projectId: messageProjectId,
+      }
+      setMessages((prev) => [...prev, timeoutMessage])
+      return
+    }
+    
     const newMessage: Message = {
       id: generateMessageId(),
       type: data.type,
@@ -159,7 +221,7 @@ export default function Home() {
       activeProjectIdRef.current = messageProjectId
       setActiveProjectId(messageProjectId)
       setMessages((prev) => [...prev, newMessage])
-    } else if (data.type === 'agent_message' || data.type === 'status') {
+    } else if (data.type === 'agent_message' || data.type === 'status' || data.type === 'reply_to_human') {
       // Only add if matches active project (use ref for latest value in closure)
       setMessages((prev) => {
         // Check if this message belongs to our active session
@@ -174,6 +236,7 @@ export default function Home() {
       setProgressInfo(null)  // Clear progress
       setAgentStates([])  // Clear agent states
       setFailedProjectId(null)  // Clear failed project
+      setPendingQuestion(null)  // Clear any pending questions
       // Don't clear active project for continued conversations - keep it selected
       fetchProjects()
       if (messageProjectId) {
@@ -183,6 +246,7 @@ export default function Home() {
       setMessages((prev) => [...prev, newMessage])
       setIsGenerating(false)
       setProgressInfo(null)
+      setPendingQuestion(null)  // Clear any pending questions
       // Track failed project for retry
       if (data.can_retry && messageProjectId) {
         setFailedProjectId(messageProjectId)
@@ -298,7 +362,16 @@ export default function Home() {
   }, [])
 
   const handleSendMessage = (content: string) => {
-    if (!content.trim() || isGenerating) return
+    if (!content.trim()) return
+    
+    // If there's a pending question, treat this as a response to it
+    if (pendingQuestion) {
+      handleClarificationResponse(pendingQuestion.questionId, content)
+      return
+    }
+    
+    // Normal message flow - don't send if generating (unless responding to question)
+    if (isGenerating) return
 
     // Add user message
     const userMessage: Message = {
@@ -436,6 +509,72 @@ export default function Home() {
     loadProjectDetails(project.id)
   }
 
+  // Handle user response to clarification question
+  const handleClarificationResponse = (questionId: string, response: string) => {
+    console.log('[handleClarificationResponse] Called with:', { questionId, response, pendingQuestion })
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      console.error('[handleClarificationResponse] WebSocket not open!')
+      return
+    }
+    
+    // Add user response as a message
+    const responseMessage: Message = {
+      id: generateMessageId(),
+      type: 'user_response',
+      agent: 'User',
+      content: response,
+      timestamp: new Date().toISOString(),
+      projectId: pendingQuestion?.projectId,
+      questionId: questionId,
+    }
+    setMessages((prev) => [...prev, responseMessage])
+    
+    const payload = {
+      type: 'user_response',
+      question_id: questionId,
+      project_id: pendingQuestion?.projectId,
+      response: response,
+    }
+    console.log('[handleClarificationResponse] Sending:', payload)
+    
+    // Send response to server
+    wsRef.current.send(JSON.stringify(payload))
+    
+    // Clear pending question (will be confirmed by server)
+    setPendingQuestion(null)
+    setShowClarificationDialog(false)
+  }
+
+  // Handle skipping a clarification question
+  const handleSkipQuestion = (questionId: string) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+    
+    // Add skip message
+    const skipMessage: Message = {
+      id: generateMessageId(),
+      type: 'user_response',
+      agent: 'User',
+      content: '[Skipped - using default]',
+      timestamp: new Date().toISOString(),
+      projectId: pendingQuestion?.projectId,
+      questionId: questionId,
+      skipped: true,
+    }
+    setMessages((prev) => [...prev, skipMessage])
+    
+    // Send skip to server
+    wsRef.current.send(
+      JSON.stringify({
+        type: 'skip_question',
+        question_id: questionId,
+      })
+    )
+    
+    // Clear pending question
+    setPendingQuestion(null)
+    setShowClarificationDialog(false)
+  }
+
   const handleDownloadProject = async () => {
     if (!currentProject) return
     window.open(
@@ -560,6 +699,8 @@ export default function Home() {
             onRegenerate={handleRegenerateProject}
             onRetry={failedProjectId ? () => handleRetryProject(failedProjectId) : undefined}
             conversationMode={conversationMode}
+            pendingQuestion={pendingQuestion}
+            onSkipQuestion={pendingQuestion ? () => handleSkipQuestion(pendingQuestion.questionId) : undefined}
           />
         </div>
 
@@ -596,6 +737,15 @@ export default function Home() {
         isOpen={showTemplateSelector}
         onClose={() => setShowTemplateSelector(false)}
         onSelectTemplate={handleTemplateSelect}
+      />
+
+      {/* Clarification Dialog for modal-type questions */}
+      <ClarificationDialog
+        isOpen={showClarificationDialog}
+        question={pendingQuestion}
+        onRespond={handleClarificationResponse}
+        onSkip={handleSkipQuestion}
+        onClose={() => setShowClarificationDialog(false)}
       />
     </div>
   )

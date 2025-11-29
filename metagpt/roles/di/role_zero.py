@@ -353,7 +353,7 @@ class RoleZero(Role):
             await reporter.async_report({"type": "classify"})
             intent_result = await self.llm.aask(context, system_msgs=[self.format_quick_system_prompt()])
 
-        if "QUICK" in intent_result or "AMBIGUOUS" in intent_result:  # llm call with the original context
+        if "QUICK" in intent_result:  # llm call with the original context
             async with ThoughtReporter(enable_llm_stream=True) as reporter:
                 await reporter.async_report({"type": "quick"})
                 answer = await self.llm.aask(
@@ -367,6 +367,32 @@ class RoleZero(Role):
                 # an actual TASK intent misclassified as QUICK, correct it here, FIXME: a better way is to classify it correctly in the first place
                 answer = ""
                 intent_result = "TASK"
+        elif "AMBIGUOUS" in intent_result:
+            # For ambiguous requests, ask the user for clarification via ask_human
+            # First, generate a clarification question using LLM
+            clarification_prompt = """The user's request is ambiguous or lacks sufficient detail. 
+Generate a concise clarification question to ask the user. Focus on the most critical missing information.
+Your question should be direct, specific, and help the user understand what additional information is needed.
+Output ONLY the question, nothing else."""
+            async with ThoughtReporter(enable_llm_stream=True) as reporter:
+                await reporter.async_report({"type": "clarify"})
+                clarification_question = await self.llm.aask(
+                    self.llm.format_msg(memory + [UserMessage(content=clarification_prompt)]),
+                    system_msgs=[self._get_prefix()],
+                )
+            # Ask the user for clarification
+            human_response = await self.ask_human(clarification_question.strip())
+            # Add the clarification response to memory and continue processing
+            if human_response and not human_response.strip().lower().endswith(("stop", "<stop>")):
+                # Use RunCommand as cause_by to prevent re-triggering _quick_think
+                # This marks it as an internal response, not a new user requirement
+                self.rc.memory.add(UserMessage(content=human_response, cause_by=RunCommand))
+                # Change intent to TASK so the system proceeds with task execution
+                # instead of re-classifying and potentially asking again
+                intent_result = "TASK"
+                answer = ""
+            else:
+                answer = "User chose not to provide clarification. Stopping."
         elif "SEARCH" in intent_result:
             query = "\n".join(str(msg) for msg in memory)
             answer = await SearchEnhancedQA().run(query)
@@ -431,7 +457,11 @@ class RoleZero(Role):
         elif cmd["command_name"] == "end":
             command_output = await self._end()
         elif cmd["command_name"] == "RoleZero.ask_human":
-            human_response = await self.ask_human(**cmd["args"])
+            # Handle parameter name mismatch: LLM may use 'content' but method expects 'question'
+            args = cmd["args"].copy()
+            if "content" in args and "question" not in args:
+                args["question"] = args.pop("content")
+            human_response = await self.ask_human(**args)
             if human_response.strip().lower().endswith(("stop", "<stop>")):
                 human_response += "The user has asked me to stop because I have encountered a problem."
                 self.rc.memory.add(UserMessage(content=human_response, cause_by=RunCommand))
